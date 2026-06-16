@@ -1,0 +1,1276 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Standard User Operations Checklist — Lucid Camera Acquisition Tool</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+        }
+
+        .page-wrapper {
+            display: flex;
+            max-width: 1150px;
+            margin: 0 auto;
+            padding: 20px 16px;
+            gap: 0;
+            align-items: flex-start;
+        }
+
+        .sidebar {
+            width: 200px;
+            flex-shrink: 0;
+            position: sticky;
+            top: 20px;
+            align-self: flex-start;
+            background-color: #1565C0;
+            border-radius: 6px 0 0 6px;
+            padding: 20px 0 20px 0;
+            color: white;
+        }
+
+        .sidebar-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #90CAF9;
+            padding: 0 16px 12px 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+            margin-bottom: 8px;
+        }
+
+        .sidebar a {
+            display: block;
+            padding: 7px 16px;
+            color: #BBDEFB;
+            text-decoration: none;
+            font-size: 13.5px;
+            border-left: 3px solid transparent;
+            transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+        }
+
+        .sidebar a:hover {
+            background-color: rgba(255, 255, 255, 0.12);
+            color: white;
+            border-left-color: #64B5F6;
+        }
+
+        .sidebar-back {
+            display: block;
+            padding: 7px 16px 12px 16px;
+            color: #90CAF9;
+            text-decoration: none;
+            font-size: 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+            margin-bottom: 8px;
+        }
+
+        .sidebar-back:hover {
+            color: white;
+        }
+
+        .container {
+            flex: 1;
+            min-width: 0;
+            padding: 40px 36px;
+            background-color: white;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            border-radius: 0 6px 6px 0;
+        }
+
+        header {
+            border-bottom: 4px solid #2196F3;
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+        }
+
+        h1 {
+            color: #1976D2;
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 16px;
+            font-style: italic;
+        }
+
+        h2 {
+            color: #1976D2;
+            font-size: 24px;
+            margin-top: 40px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #E3F2FD;
+        }
+
+        h3 {
+            color: #2196F3;
+            font-size: 18px;
+            margin-top: 24px;
+            margin-bottom: 12px;
+        }
+
+        p {
+            margin-bottom: 16px;
+        }
+
+        ul,
+        ol {
+            margin-left: 32px;
+            margin-bottom: 16px;
+        }
+
+        li {
+            margin-bottom: 10px;
+        }
+
+        code {
+            background-color: #f4f4f4;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            padding: 2px 6px;
+            font-family: "Courier New", "Courier", monospace;
+            color: #d32f2f;
+            font-size: 14px;
+        }
+
+        .note {
+            background-color: #FFF3E0;
+            border-left: 4px solid #FF9800;
+            padding: 16px;
+            margin: 16px 0;
+            border-radius: 3px;
+        }
+
+        .note strong {
+            color: #E65100;
+        }
+
+        .tip {
+            background-color: #E8F5E9;
+            border-left: 4px solid #4CAF50;
+            padding: 16px;
+            margin: 16px 0;
+            border-radius: 3px;
+        }
+
+        .tip strong {
+            color: #2E7D32;
+        }
+
+        .warning {
+            background-color: #FFEBEE;
+            border-left: 4px solid #F44336;
+            padding: 16px;
+            margin: 16px 0;
+            border-radius: 3px;
+        }
+
+        .warning strong {
+            color: #C62828;
+        }
+
+        .info {
+            background-color: #E3F2FD;
+            border-left: 4px solid #1976D2;
+            padding: 16px;
+            margin: 16px 0;
+            border-radius: 3px;
+        }
+
+        .info strong {
+            color: #0D47A1;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+        }
+
+        th {
+            background-color: #E3F2FD;
+            color: #1976D2;
+            padding: 12px;
+            text-align: left;
+            border-bottom: 2px solid #2196F3;
+            font-weight: 600;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #E0E0E0;
+            vertical-align: top;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .section {
+            margin-bottom: 40px;
+        }
+
+        /* Checklist steps — numbered with a blue circle */
+        .checklist {
+            list-style: none;
+            margin-left: 0;
+            counter-reset: step;
+        }
+
+        .checklist li {
+            counter-increment: step;
+            position: relative;
+            margin-bottom: 14px;
+            padding: 12px 14px 12px 56px;
+            background: #FAFAFA;
+            border: 1px solid #E8E8E8;
+            border-radius: 6px;
+        }
+
+        .checklist li::before {
+            content: counter(step);
+            position: absolute;
+            left: 14px;
+            top: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            background-color: #1976D2;
+            color: white;
+            border-radius: 50%;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .checklist li.warn-step {
+            background: #FFF8E1;
+            border-color: #FFD54F;
+        }
+
+        .checklist li.warn-step::before {
+            background-color: #F57F17;
+        }
+
+        .code-block {
+            background-color: #f4f4f4;
+            border-left: 4px solid #2196F3;
+            padding: 16px;
+            margin: 16px 0;
+            overflow-x: auto;
+            border-radius: 3px;
+        }
+
+        .code-block code {
+            background-color: transparent;
+            border: none;
+            color: #333;
+            padding: 0;
+            font-size: 13px;
+            font-family: "Courier New", "Courier", monospace;
+            display: block;
+            white-space: pre;
+            overflow-x: auto;
+        }
+
+        footer {
+            border-top: 2px solid #E3F2FD;
+            margin-top: 40px;
+            padding-top: 20px;
+            color: #999;
+            font-size: 13px;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="page-wrapper">
+
+        <nav class="sidebar">
+            <a class="sidebar-back" href="manual.html">← User Manual</a>
+            <div class="sidebar-title">Checklist</div>
+            <a href="#startup">1. Startup &amp; Connect</a>
+            <a href="#preview">2. Preview &amp; Focus</a>
+            <a href="#framerate">3. Target Frame Rate</a>
+            <a href="#trigger">4. Trigger Setup</a>
+            <a href="#settings">5. Verify Settings</a>
+            <a href="#acquisition">6. Acquisition</a>
+            <a href="#background">7. Background Fields</a>
+            <a href="#config-persist">8. Config Persistence</a>
+            <a href="#data-parsing">Data Parsing Reference</a>
+            <a href="#pinned-ref">Pinned Params Reference</a>
+            <a href="#scope">Scope / Timing</a>
+        </nav>
+
+        <div class="container">
+
+            <header>
+                <h1>Standard User Operations</h1>
+                <p class="subtitle">Step-by-step checklist for a typical ATX245S acquisition session</p>
+                <p style="margin-top:12px; font-size:14px;">
+                    Full software reference: <a href="manual.html" style="color:#1976D2; font-weight:600;">User Manual
+                        ↗</a>
+                    &nbsp;|&nbsp;
+                    Hardware details: <a href="ATX245S_1.21.0.0_Documentation_English/html/welcome_page.html"
+                        style="color:#1976D2; font-weight:600;">ATX245S Camera Manual ↗</a>
+                </p>
+            </header>
+
+            <!-- ================================================================
+                 SECTION 1 — STARTUP & CONNECTION
+                 ================================================================ -->
+            <section id="startup" class="section">
+                <h2>1 — Startup &amp; Camera Connection</h2>
+
+                <ul class="checklist">
+                    <li>
+                        Launch the <strong>Lucid Camera Acquisition Tool</strong>. The camera list may populate
+                        automatically. If it is empty or you have just powered the camera on, click the
+                        <strong>Refresh</strong> button next to the camera dropdown to re-scan the network.
+                    </li>
+                    <li>
+                        Select the <strong>ATX245S</strong> entry from the camera dropdown. The serial number is
+                        shown in the list; confirm it matches the unit physically connected.
+                    </li>
+                    <li>
+                        Click <strong>Connect</strong>. The status bar should show a successful connection message
+                        and the parameter controls will become active.
+                    </li>
+                    <li class="warn-step">
+                        After a camera <strong>power cycle</strong>, the camera boots with the <strong>DCS
+                            preset</strong>
+                        loaded. You must reload your custom configuration manually — see
+                        <a href="#config-persist">Section 8 — Config Persistence</a>. Do this before adjusting
+                        anything else, so your saved settings are the baseline.
+                    </li>
+                </ul>
+            </section>
+
+            <!-- ================================================================
+                 SECTION 2 — PREVIEW & FOCUS
+                 ================================================================ -->
+            <section id="preview" class="section">
+                <h2>2 — Preview &amp; Focus</h2>
+
+                <ul class="checklist">
+                    <li>
+                        Click the <strong>Preview</strong> button on the main window. A separate, non-blocking
+                        preview window opens — the main window stays fully interactive.
+                    </li>
+                    <li>
+                        Click <strong>Start Preview</strong> in the preview window to begin the live camera stream.
+                        You should see the live image within a second or two.
+                    </li>
+                    <li>
+                        Use <strong>Auto Contrast</strong> (bottom bar, or <em>Auto-contrast → Enable</em> in the
+                        menu) to automatically stretch the display range. This makes it much easier to judge focus
+                        before the exposure and gain are finalized.
+                    </li>
+                    <li>
+                        <strong>Focus adjustment</strong> is done remotely via the motorized focus controller.
+                        Connect via <strong>Remote Desktop</strong> to the focus laptop:
+                        <br><br>
+                        <strong>IP:</strong> <code>xxx.xxx.xxx.73</code> &nbsp;|&nbsp;
+                        <strong>Username:</strong> <code>Detector-B</code> &nbsp;|&nbsp;
+                        <strong>Password:</strong> (usual lab password)
+                        <br><br>
+                        Adjust focus while watching the live preview in the acquisition software.
+                        Use <strong>ROI → Open Focus Diagnostic</strong> to open a quantitative focus metric plot
+                        — draw a small ROI over a sharp feature in the scene and maximize the metric value.
+                    </li>
+                    <li>
+                        Left-click any pixel in the preview image to pin a <strong>count readback overlay</strong>
+                        showing the raw sensor value at that position. Useful for checking exposure level on a
+                        specific region.
+                    </li>
+                    <li>
+                        Verify that no large areas are saturated (red overlay) or dead-pixel yellow — adjust
+                        ExposureTime and/or Gain to bring the histogram into a comfortable range.
+                    </li>
+                </ul>
+
+                <div class="tip">
+                    <strong>Tip:</strong> Zoom with the scroll wheel, pan by dragging, and double-click to
+                    fit-to-window. Right-click the Draw ROI button to reset the ROI back to full frame if needed.
+                </div>
+            </section>
+
+            <!-- ================================================================
+                 SECTION 3 — TARGET FRAME RATE (82 Hz)
+                 ================================================================ -->
+            <section id="framerate" class="section">
+                <h2>3 — Configuring for Maximum Frame Rate (82 Hz)</h2>
+
+                <p>
+                    The ATX245S sensor can deliver up to <strong>82 Hz</strong> frame rate, but only if the total
+                    data throughput is reduced to roughly <strong>¼ of the full-frame data rate</strong>. The
+                    interface link (10GigE) is the bottleneck, not the sensor. Use any combination of the
+                    following levers — the product of their reductions must reach ~¼:
+                </p>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Lever</th>
+                            <th>How to set it</th>
+                            <th>Throughput effect</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Pixel bit depth</strong></td>
+                            <td>Set <code>PixelFormat</code> to <code>Mono8</code> instead of <code>Mono12</code>
+                                or <code>Mono16</code></td>
+                            <td>12-bit → 8-bit: ×0.67; 16-bit → 8-bit: ×0.50</td>
+                        </tr>
+                        <tr>
+                            <td><strong>ROI crop</strong></td>
+                            <td>Draw an ROI in the preview window or set <code>Width</code> / <code>Height</code>
+                                / <code>OffsetX</code> / <code>OffsetY</code> directly</td>
+                            <td>
+                                Proportional to area fraction — e.g. ½ width × ½ height = ×0.25.
+                                <br><br>
+                                <strong>Row reduction is what matters most.</strong> CMOS sensors read out
+                                row-by-row, so reducing <code>Height</code> directly shortens the readout time
+                                and raises the maximum frame rate. Reducing <code>Width</code> only lowers
+                                the data volume on the link — it does not shorten readout. Prioritize a
+                                narrow strip (fewer rows) over a narrow column (fewer columns) when the
+                                goal is maximum frame rate.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Binning / Decimation</strong></td>
+                            <td>Set <code>BinningHorizontal</code> and <code>BinningVertical</code> (or
+                                <code>DecimationHorizontal</code> / <code>DecimationVertical</code>) in Advanced
+                            </td>
+                            <td>2×2 binning = ×0.25 pixels transmitted</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="note">
+                    <strong>Example path to 82 Hz:</strong> 2×2 binning alone reduces throughput to ¼ and is the
+                    simplest single setting. Alternatively, a ½-height ROI combined with Mono8 (vs Mono12) achieves
+                    a similar reduction while preserving spatial resolution in one axis.
+                </div>
+
+                <ul class="checklist">
+                    <li>
+                        Open <strong>Advanced Parameters</strong> and set <code>BinningHorizontal</code> and
+                        <code>BinningVertical</code> to <code>2</code> (or crop the ROI to the required area),
+                        then adjust <code>PixelFormat</code> as needed.
+                    </li>
+                    <li>
+                        <strong>If using external triggering (typical):</strong> leave
+                        <code>AcquisitionFrameRateEnable</code> <strong>false</strong> (the default).
+                        In this state <code>AcquisitionFrameRate</code> is a read-only node that reports
+                        what the frame rate <em>would</em> be for internal triggering — i.e. the sensor's
+                        current maximum given the active resolution and bit depth. The camera will accept
+                        trigger pulses up to that ceiling; your external trigger just needs to be a few Hz
+                        slower than this reported value to guarantee every pulse is captured.
+                        <br><br>
+                        <strong>If using internal triggering:</strong> set
+                        <code>AcquisitionFrameRateEnable</code> to <strong>true</strong> first — this
+                        unlocks <code>AcquisitionFrameRate</code> for editing — then set it to
+                        <strong>82</strong> (or the desired value). If the camera rejects the value, the
+                        current resolution / bit depth still exceeds the link budget; reduce further.
+                    </li>
+                    <li>
+                        Set <code>ExposureTime</code> to a value <em>shorter than one frame period</em>
+                        (1 / 82 Hz ≈ 12,200 µs). A safe margin is leaving at least 4 ms of dead time, so
+                        <strong>≤ 8,000 µs</strong> at 82 Hz. You need way less than this, as the e-beam pulse length is
+                        only 200 ps and the scintillator decays with a lifetime of tens of nanoseconds.
+                    </li>
+                    <li>
+                        Click <strong>Apply Pinned Parameters</strong> on the main window and verify the frame
+                        rate in the preview status bar matches the target.
+                    </li>
+                </ul>
+            </section>
+
+            <!-- ================================================================
+                 SECTION 4 — TRIGGER SETUP
+                 ================================================================ -->
+            <section id="trigger" class="section">
+                <h2>4 — Trigger Setup</h2>
+
+                <p>
+                    The camera operates in <strong>hardware trigger mode</strong> for synchronized acquisition.
+                    Each frame trigger comes from an external signal (e.g., from the oscilloscope or a function
+                    generator). The camera also outputs an <strong>Exposure Active</strong> signal on a GPIO line
+                    that goes high for the exact duration of each frame's integration period.
+                </p>
+
+                <ul class="checklist">
+                    <li>
+                        Confirm <code>TriggerMode</code> is set to <strong>On</strong> (in the pinned parameters
+                        or via Advanced). When trigger mode is on, the <em>Start Acquisition</em> button label
+                        changes to <strong>Start Streaming</strong> — the camera arms and waits for hardware
+                        pulses rather than free-running.
+                    </li>
+                    <li>
+                        Confirm <code>TriggerSource</code> is set to the correct GPIO line (e.g.,
+                        <code>Line0</code> or <code>Line2</code> — check which line your trigger cable is
+                        physically connected to).
+                    </li>
+                    <li>
+                        Confirm <code>TriggerActivation</code> matches your signal (typically
+                        <code>RisingEdge</code>).
+                    </li>
+                    <li>
+                        Verify the <strong>Exposure Active</strong> output line assignment in Advanced
+                        (<code>LineSelector</code> → select output line → <code>LineSource</code> =
+                        <code>ExposureActive</code>). Connect this output to a scope channel for timing reference.
+                    </li>
+                </ul>
+
+                <div class="info">
+                    <strong>Event trigger timing:</strong> Each frame carries a <code>LineStatusAll</code> chunk
+                    field that records whether the <em>event trigger input</em> (e.g., the stimulus signal from
+                    your experiment) was high or low at the moment the frame was captured. By combining:
+                    <ul style="margin-top:8px; margin-bottom:0;">
+                        <li>the frame's <code>line_status_all</code> bit (informs on whether the event was active?)</li>
+                        <li>the oscilloscope-measured time difference between the event trigger and the
+                            subsequent camera frame trigger pulse</li>
+                    </ul>
+                    you can determine the precise sub-frame timing of the event relative to any acquired frame.
+                    See <a href="#scope">Scope &amp; Timing</a> below for the analysis workflow.
+                </div>
+
+                <div class="tip">
+                    <strong>Chunk data must be enabled</strong> for <code>line_status_all</code> to appear in
+                    <code>frame_data.csv</code>. In Advanced Parameters, set <code>ChunkModeActive = true</code>,
+                    then enable individual chunk selectors (<code>ChunkSelector = LineStatusAll</code> →
+                    <code>ChunkEnable = true</code>, and repeat for Timestamp, Gain, ExposureTime).
+                    Should be already set in your Custom config.
+                </div>
+
+                <div class="info">
+                    <strong>Exposure delay and laser phase alignment:</strong>
+                    The HHLC chopper opens at 82 Hz, which is the Jülich 987 Hz reference signal divided by 12.
+                    The camera must be phased to sync with the HHLC opening
+                    before data acquisition. Two approaches:
+                    <ul style="margin-top:8px; margin-bottom:0;">
+                        <li>
+                            <strong>Camera-side delay:</strong> set <code>TriggerDelay</code> (in the pinned
+                            parameters or Advanced) to shift the start of the camera exposure window by the
+                            required number of microseconds. <code>TriggerDelay</code> has single-µs
+                            precision and is the preferred method when only small adjustments are needed.
+                        </li>
+                        <li>
+                            <strong>Source-side phase:</strong> adjust the Jülich Chopper phase via the
+                            Laser FPGA control to align the 82 Hz output pulse with the desired point in the
+                            camera's integration window. Use this approach when sub-µs precision is needed.
+                        </li>
+                    </ul>
+                    Confirm alignment by monitoring the <strong>Exposure Active</strong> GPIO output (camera exposure is
+                    <strong>low</strong>) the
+                    oscilloscope along with the B-station slow photodiode signal. Once phased, it is possible to reduce
+                    the exposure time lower to ensure it is only signle bunch per frame.
+                </div>
+            </section>
+
+            <!-- ================================================================
+                 SECTION 5 — VERIFY PINNED SETTINGS
+                 ================================================================ -->
+            <section id="settings" class="section">
+                <h2>5 — Verify Pinned Settings</h2>
+
+                <p>
+                    Before every acquisition, review the pinned parameters panel on the main window. The most
+                    critical items are listed below. See <a href="#pinned-ref">Pinned Parameters Reference</a>
+                    for a full description of each setting.
+                </p>
+
+                <ul class="checklist">
+                    <li><code>TriggerMode</code> = <strong>On</strong> — required for hardware-synchronized acquisition.
+                    </li>
+                    <li>
+                        <code>AcquisitionFrameRateEnable</code> is <strong>false</strong> (typical for external
+                        triggering). In this state <code>AcquisitionFrameRate</code> is read-only and reports the
+                        sensor's current maximum — verify this value is a few Hz <em>above</em> your intended
+                        trigger rate so every pulse is accepted. If it is too low, reduce resolution, bit depth,
+                        or binning until the ceiling rises above your trigger rate.
+                    </li>
+                    <li><code>ExposureTime</code> is shorter than the frame period with adequate margin.</li>
+                    <li><code>ExposureTimeAuto</code> and <code>GainAuto</code> are <strong>Off</strong>.
+                        For scientific experiments each frame must integrate for exactly the same duration at the same
+                        gain — auto-exposure or auto-gain will vary brightness between frames and corrupt
+                        quantitative analysis.
+                        <br><br>
+                        <strong>Gain regime:</strong> Gain ≤ 24 dB keeps the sensor in its
+                        <em>low-gain (analog) regime</em>, which preserves the full well capacity and gives the
+                        best dynamic range. Gain &gt; 24 dB switches to a digital multiplier that amplifies
+                        read noise along with the signal — avoid it unless the scene is extremely dim and
+                        dynamic range is not a concern.
+                    </li>
+                    <li><code>PixelFormat</code> matches the bit depth you intend to record
+                        (affects file size and post-processing pipeline).</li>
+                    <li><code>Width</code>, <code>Height</code>, <code>OffsetX</code>, <code>OffsetY</code>
+                        define the active ROI. Confirm the region is correct in the preview window (green overlay).</li>
+                    <li>Output folder is set, has a meaningful acquisition name (or leave blank for auto-name and
+                        -timestamp), and the drive has sufficient free space.
+                        <br><br>
+                        <strong>Save to the D:\ drive.</strong> The D: drive is a Samsung 990 PRO NVMe SSD with a
+                        sustained write speed of ~6 GB/s — well above the ~1.5 GB/s needed for 82 Hz Mono12 acquisition.
+                        The C: drive (OS drive) is significantly slower and should not be used for data.
+                        <br><br>
+                        <strong>Rough size estimate:</strong> frames × width × height × (bits/8) bytes.
+                        At 82 Hz for 10 s with a 2664×2304 cropped frame at Mono12 (stored as 2 bytes):
+                        820 × 2664 × 2304 × 2 ≈ <strong>8.2 GB</strong> — verify free space before starting (the camera
+                        will warn the user if there is not sufficient space for an auto-stop acquisition or &lt;50 GB
+                        for a manual acquisition).
+                    </li>
+                    <li>If using <strong>Auto-Stop</strong>, confirm the timer duration is correct:
+                        <em>Config → Auto-Stop Acquisition</em>. The Stop button will show the countdown as soon
+                        as acquisition starts.
+                    </li>
+                </ul>
+            </section>
+
+            <!-- ================================================================
+                 SECTION 6 — ACQUISITION
+                 ================================================================ -->
+            <section id="acquisition" class="section">
+                <h2>6 — Running Acquisition</h2>
+
+                <ul class="checklist">
+                    <li>
+                        Optionally click <strong>Notes…</strong> and enter a brief description of the run
+                        (sample, conditions, event type). These notes are saved in <code>metadata.json</code>
+                        alongside the frames.
+                    </li>
+                    <li>
+                        Click <strong>Start Streaming</strong> (trigger mode) or <strong>Start Acquisition</strong>
+                        (free-run mode). The preview window pauses automatically.
+                    </li>
+                    <li>
+                        Deliver your experiment / event trigger. The frame counter increments as frames arrive.
+                        The acquisition runs until you click <strong>Stop</strong> or the auto-stop timer fires.
+                    </li>
+                    <li>
+                        After stopping, the log prints the complete save path:
+                        <em>"Acquisition finished — N frames saved to: 'D:/.../[name]_..."</em>.
+                        Note or copy this path for post-processing.
+                    </li>
+                    <li>
+                        Each acquisition folder always contains:
+                        <code>metadata.json</code>, <code>frame_data.csv</code>, <code>camera_settings.json</code>,
+                        and the image files. Verify the frame count in the log matches expectations before moving on.
+                    </li>
+                </ul>
+
+                <div class="warning">
+                    <strong>File format note:</strong> Images are saved as <strong>.raw</strong> files — a direct
+                    binary stream of pixel values with no header, written at maximum speed to minimize I/O
+                    overhead. They cannot be opened directly in standard image viewers. Use the Python snippet in
+                    the <a href="manual.html#output">User Manual → Raw Sequence</a> section to load them, or
+                    ImageJ with the correct import settings (width × height × bit depth from
+                    <code>metadata.json</code>).
+                </div>
+            </section>
+
+            <!-- ================================================================
+                 SECTION 7 — WHITE / DARK FIELD
+                 ================================================================ -->
+            <section id="background" class="section">
+                <h2>7 — Capturing Background Fields</h2>
+
+                <p>
+                    Background correction removes fixed-pattern noise (dark current) and illumination non-uniformity
+                    (flat-field). The standard formula applied in post-processing is:
+                </p>
+
+                <p style="text-align:center; font-size:17px; font-family:'Courier New', monospace;
+                           margin: 20px 0; color:#1565C0;">
+                    corrected = (data − dark) / (white − dark)
+                </p>
+
+                <ul class="checklist">
+                    <li>
+                        <strong>Dark field:</strong> Block all light reaching the sensor (lens cap or shutter).
+                        Go to <em>Tools → Capture White/Dark Field</em> and capture the dark field. This measures
+                        the camera's thermal / electronic offset at the current exposure and gain settings.
+                    </li>
+                    <li>
+                        <strong>White field:</strong> Illuminate the scene uniformly (remove sample, use a
+                        diffuser or blank slide). Capture the white field from the same menu. This measures the
+                        illumination pattern and pixel-to-pixel sensitivity variation.
+                    </li>
+                    <li>
+                        Both fields are saved as averaged images in the output folder. Capture them at the
+                        <em>same ExposureTime, Gain, PixelFormat, and ROI</em> as your data — the correction
+                        is meaningless otherwise.
+                    </li>
+                    <li>
+                        If acquisition conditions change (different exposure, different ROI), recapture both fields.
+                    </li>
+                </ul>
+
+                <div class="tip">
+                    <strong>Tip:</strong> Capture the white field <em>before</em> placing the sample, and capture
+                    the dark field <em>without moving anything else</em> — stray light or mechanical shift between
+                    the two captures introduces residual error.
+                </div>
+            </section>
+
+            <!-- ================================================================
+                 SECTION 8 — CONFIG PERSISTENCE
+                 ================================================================ -->
+            <section id="config-persist" class="section">
+                <h2>8 — Saving and Loading Camera Configuration</h2>
+
+                <p>
+                    Camera settings are <em>not</em> retained across a power cycle by default — the camera
+                    boots with the <strong>Custom settings preset</strong>. Use the custom config workflow to restore
+                    your working configuration reliably.
+                </p>
+
+                <ul class="checklist">
+                    <li>
+                        After configuring all camera parameters, go to <em>Advanced → Save Custom Config…</em>.
+                        This writes the full GenICam node snapshot to a <code>.json</code> file <em>and</em>
+                        to the camera's on-board user preset memory simultaneously.
+                    </li>
+                    <li>
+                        After every camera power cycle, go to <em>Advanced → Load Custom Config…</em> and
+                        select the saved <code>.json</code> file to restore all settings. Do this immediately
+                        after connecting — before adjusting any parameters.
+                    </li>
+                    <li>
+                        Note: every acquisition automatically saves a <code>camera_settings.json</code> snapshot
+                        alongside the data. This serves as a permanent record even if the preset is later
+                        overwritten, and can be loaded via <em>Load Custom Config…</em> to reproduce the exact
+                        conditions of a past session.
+                    </li>
+                </ul>
+
+                <div class="warning">
+                    <strong>Important:</strong> After a power cycle, connect to the camera and load your
+                    Custom config <em>before</em> opening the preview or starting any acquisition. If you
+                    start with the Custom settings preset, the trigger mode, frame rate, ROI, and pixel format will all
+                    be at factory defaults — not your experiment settings.
+                </div>
+            </section>
+
+            <!-- ================================================================
+                 DATA PARSING REFERENCE
+                 ================================================================ -->
+            <section id="data-parsing" class="section">
+                <h2>Data Parsing Reference</h2>
+
+                <p>
+                    Raw files and TIFF stacks written by this software contain camera-native pixel data.
+                    The correct loading strategy depends on <code>pixel_format</code> in
+                    <code>metadata.json</code>. The table below maps every format to its on-disk layout.
+                </p>
+
+                <h3>Format Summary Table</h3>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th><code>pixel_format</code></th>
+                            <th>Bits / pixel</th>
+                            <th>Bytes / pixel</th>
+                            <th>NumPy dtype</th>
+                            <th>Value range</th>
+                            <th>Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>Mono8</code></td>
+                            <td>8</td>
+                            <td>1.000</td>
+                            <td><code>uint8</code></td>
+                            <td>0–255</td>
+                            <td>Trivial; directly loadable.</td>
+                        </tr>
+                        <tr>
+                            <td><code>Mono12</code></td>
+                            <td>12</td>
+                            <td>2.000</td>
+                            <td><code>uint16</code>, LE</td>
+                            <td>0–4095</td>
+                            <td>One pixel per 16-bit word; upper 4 bits are zero.</td>
+                        </tr>
+                        <tr>
+                            <td><code>Mono16</code></td>
+                            <td>16</td>
+                            <td>2.000</td>
+                            <td><code>uint16</code>, LE</td>
+                            <td>0–65535</td>
+                            <td>Full 16-bit; directly loadable.</td>
+                        </tr>
+                        <tr>
+                            <td><code>Mono12p</code></td>
+                            <td>12</td>
+                            <td>1.500</td>
+                            <td>—</td>
+                            <td>0–4095</td>
+                            <td>PFNC LSB-first. 3 bytes per 2 pixels. Requires unpacking (see below).</td>
+                        </tr>
+                        <tr>
+                            <td><code>Mono12Packed</code></td>
+                            <td>12</td>
+                            <td>1.500</td>
+                            <td>—</td>
+                            <td>0–4095</td>
+                            <td>Lucid MSB-first. 3 bytes per 2 pixels. Same size, different nibble order (see below).
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><code>Mono10p</code></td>
+                            <td>10</td>
+                            <td>1.250</td>
+                            <td>—</td>
+                            <td>0–1023</td>
+                            <td>PFNC LSB-first. 5 bytes per 4 pixels. Requires unpacking (see below).</td>
+                        </tr>
+                        <tr>
+                            <td><code>Mono10Packed</code></td>
+                            <td>10</td>
+                            <td>1.250</td>
+                            <td>—</td>
+                            <td>0–1023</td>
+                            <td>Lucid MSB-first. 5 bytes per 4 pixels, different layout (see below).</td>
+                        </tr>
+                        <tr>
+                            <td><code>RGB8Packed</code></td>
+                            <td>24</td>
+                            <td>3.000</td>
+                            <td><code>uint8</code></td>
+                            <td>0–255 per channel</td>
+                            <td>3-channel BGR interleaved; reshape to <code>(H, W, 3)</code>.</td>
+                        </tr>
+                        <tr>
+                            <td><code>BayerRG8</code>, <code>BayerGR8</code>, …</td>
+                            <td>8</td>
+                            <td>1.000</td>
+                            <td><code>uint8</code></td>
+                            <td>0–255</td>
+                            <td>Raw Bayer mosaic; demosaic with <code>cv2.cvtColor</code> or equivalent.</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="tip">
+                    <strong>bytes_per_frame is exact for all formats.</strong> Packed formats
+                    (Mono12p, Mono12Packed, Mono10p, Mono10Packed) report the true packed byte count
+                    <code>(bits_per_pixel × width × height) / 8</code>; non-packed formats report
+                    <code>ceil(bits_per_pixel / 8) × width × height</code>. You can use
+                    <code>bytes_per_frame</code> directly to seek to a specific frame in a raw video file.
+                </div>
+
+                <h3>TIFF Files</h3>
+                <p>
+                    TIFF stacks (<code>stack.tiff</code>) contain the camera's native bytes written directly
+                    into TIFF pages — packed formats are <em>not</em> automatically decoded. Field-capture
+                    TIFFs (<code>white_field_mean.tiff</code>, <code>dark_field_mean.tiff</code>) are always
+                    fully decoded to <code>uint16</code> (or <code>uint8</code> for 8-bit) because the field
+                    capture pipeline accumulates values in a 32-bit integer array before saving.
+                </p>
+                <p>
+                    Use <code>tiff_pixel_format</code> from <code>metadata.json</code> (<code>"uint8"</code>
+                    or <code>"uint16"</code>) to confirm the TIFF type. For field TIFFs, this is always the
+                    correct decoded dtype.
+                </p>
+
+                <h3>Python — Universal Loader</h3>
+                <p>
+                    The function below dispatches on <code>pixel_format</code> and returns a
+                    <code>(height, width)</code> <code>uint16</code> array for all mono formats:
+                </p>
+
+                <div class="code-block">
+                    <code>import numpy as np
+import json
+
+def load_raw_frame(path, meta):
+    """Load a single .raw frame. meta is the parsed metadata.json dict."""
+    width  = meta["width"]
+    height = meta["height"]
+    fmt    = meta["pixel_format"]
+    bpp    = meta["bits_per_pixel"]
+
+    raw = np.fromfile(path, dtype=np.uint8)
+
+    # ── Non-packed formats ─────────────────────────────────────────────────
+    if bpp == 8:
+        return raw.reshape(height, width)
+
+    if fmt in ("Mono12", "Mono16"):
+        # Little-endian uint16; values already in correct range
+        return raw.view(np.uint16).reshape(height, width)
+
+    # ── Mono12p (PFNC LSB-first, 3 bytes → 2 pixels) ──────────────────────
+    if fmt == "Mono12p":
+        b  = raw.reshape(-1, 3)
+        b0 = b[:, 0].astype(np.uint16)
+        b1 = b[:, 1].astype(np.uint16)
+        b2 = b[:, 2].astype(np.uint16)
+        p0 = b0 | ((b1 & 0x0F) << 8)
+        p1 = (b1 >> 4) | (b2 << 4)
+        out = np.empty(height * width, dtype=np.uint16)
+        out[0::2] = p0
+        out[1::2] = p1
+        return out.reshape(height, width)
+
+    # ── Mono12Packed (Lucid MSB-first, 3 bytes → 2 pixels) ────────────────
+    if fmt == "Mono12Packed":
+        b  = raw.reshape(-1, 3)
+        b0 = b[:, 0].astype(np.uint16)
+        b1 = b[:, 1].astype(np.uint16)
+        b2 = b[:, 2].astype(np.uint16)
+        p0 = (b0 << 4) | (b1 & 0x0F)
+        p1 = (b2 << 4) | (b1 >> 4)
+        out = np.empty(height * width, dtype=np.uint16)
+        out[0::2] = p0
+        out[1::2] = p1
+        return out.reshape(height, width)
+
+    # ── Mono10p (PFNC LSB-first, 5 bytes → 4 pixels) ──────────────────────
+    if fmt == "Mono10p":
+        b = raw.reshape(-1, 5)
+        b = b.astype(np.uint16)
+        p = np.empty((len(b), 4), dtype=np.uint16)
+        p[:, 0] = b[:, 0] | ((b[:, 1] & 0x03) << 8)
+        p[:, 1] = (b[:, 1] >> 2) | ((b[:, 2] & 0x0F) << 6)
+        p[:, 2] = (b[:, 2] >> 4) | ((b[:, 3] & 0x3F) << 4)
+        p[:, 3] = (b[:, 3] >> 6) | (b[:, 4] << 2)
+        return p.reshape(height, width)
+
+    # ── Mono10Packed (Lucid MSB-first, 5 bytes → 4 pixels) ────────────────
+    if fmt == "Mono10Packed":
+        b = raw.reshape(-1, 5)
+        b = b.astype(np.uint16)
+        p = np.empty((len(b), 4), dtype=np.uint16)
+        p[:, 0] = (b[:, 0] << 2) | (b[:, 1] >> 6)
+        p[:, 1] = ((b[:, 1] & 0x3F) << 4) | (b[:, 2] >> 4)
+        p[:, 2] = ((b[:, 2] & 0x0F) << 6) | (b[:, 3] >> 2)
+        p[:, 3] = ((b[:, 3] & 0x03) << 8) | b[:, 4]
+        return p.reshape(height, width)
+
+    # ── RGB8Packed (3 bytes per pixel, BGR order from camera) ─────────────
+    if fmt == "RGB8Packed":
+        return raw.reshape(height, width, 3)
+
+    raise ValueError(f"Unsupported pixel_format: {fmt}")
+
+
+# ── Usage ─────────────────────────────────────────────────────────────────
+with open("metadata.json") as f:
+    meta = json.load(f)
+
+frame = load_raw_frame("frame_000001.raw", meta)
+print(frame.dtype, frame.shape, frame.max())</code>
+                </div>
+
+                <h3>Loading All Raw Frames</h3>
+                <div class="code-block">
+                    <code>import os, glob, numpy as np, json
+
+with open("metadata.json") as f:
+    meta = json.load(f)
+
+frame_files = sorted(glob.glob("frame_*.raw"))
+
+# Pre-allocate: all frames as a single array
+H, W = meta["height"], meta["width"]
+stack = np.empty((len(frame_files), H, W), dtype=np.uint16)
+
+for i, path in enumerate(frame_files):
+    stack[i] = load_raw_frame(path, meta)   # using function above
+
+print(stack.shape, stack.dtype)</code>
+                </div>
+
+                <h3>MATLAB — Loading Raw Frames</h3>
+                <div class="code-block">
+                    <code>% Read metadata
+fid  = fopen('metadata.json');
+meta = jsondecode(fread(fid, '*char')');
+fclose(fid);
+
+W   = meta.width;
+H   = meta.height;
+fmt = meta.pixel_format;
+bpp = meta.bits_per_pixel;
+
+% Non-packed formats (Mono8, Mono12, Mono16)
+fid   = fopen('frame_000001.raw', 'rb');
+if bpp == 8
+    frame = fread(fid, [W H], 'uint8=>uint8')';
+else
+    frame = fread(fid, [W H], 'uint16=>uint16')';   % little-endian uint16
+end
+fclose(fid);
+
+% Mono12p unpacking in MATLAB
+if strcmp(fmt, 'Mono12p')
+    raw  = fread(fopen('frame_000001.raw','rb'), inf, 'uint8=>uint16');
+    b    = reshape(raw, 3, []);   % 3 rows: b0, b1, b2 per pixel-pair
+    p0   = b(1,:) + bitshift(bitand(b(2,:), uint16(0x0F)), 8);
+    p1   = bitshift(b(2,:), -4)  + bitshift(b(3,:), 4);
+    flat = zeros(1, H*W, 'uint16');
+    flat(1:2:end) = p0;
+    flat(2:2:end) = p1;
+    frame = reshape(flat, W, H)';
+end</code>
+                </div>
+
+                <h3>Field Correction in Python</h3>
+                <div class="code-block">
+                    <code>import tifffile, numpy as np
+
+dark  = tifffile.imread("dark_field_mean.tiff").astype(np.float64)
+white = tifffile.imread("white_field_mean.tiff").astype(np.float64)
+
+denom = white - dark
+denom[denom == 0] = 1      # guard against dead pixels
+
+def correct(frame):
+    """Apply flat-field correction. Returns float64 in [0, 1]."""
+    return np.clip((frame.astype(np.float64) - dark) / denom, 0.0, 1.0)
+
+# Apply to an entire stack
+stack     = tifffile.imread("stack.tiff")
+corrected = np.stack([correct(f) for f in stack])</code>
+                </div>
+
+                <h3>Packed Format Bit Layouts (reference)</h3>
+                <p>
+                    The two 12-bit packed formats differ only in which nibble comes first. Both pack two
+                    12-bit pixel values into three bytes labelled b0, b1, b2:
+                </p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Format</th>
+                            <th>b0</th>
+                            <th>b1[3:0] (low nibble)</th>
+                            <th>b1[7:4] (high nibble)</th>
+                            <th>b2</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>Mono12p</code></td>
+                            <td>pix0[7:0]</td>
+                            <td>pix0[11:8]</td>
+                            <td>pix1[3:0]</td>
+                            <td>pix1[11:4]</td>
+                        </tr>
+                        <tr>
+                            <td><code>Mono12Packed</code></td>
+                            <td>pix0[11:4]</td>
+                            <td>pix0[3:0]</td>
+                            <td>pix1[11:8]</td>
+                            <td>pix1[7:0]</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p style="margin-top: 12px;">
+                    The <code>Mono10p</code> / <code>Mono10Packed</code> formats use 5 bytes per 4 pixels.
+                    The decode formulas are in the Python loader above. Both layouts are LSB-first
+                    (<code>Mono10p</code>) or MSB-first (<code>Mono10Packed</code>) analogues of the
+                    12-bit variants.
+                </p>
+            </section>
+
+            <!-- ================================================================
+                 PINNED PARAMETERS REFERENCE TABLE
+                 ================================================================ -->
+            <section id="pinned-ref" class="section">
+                <h2>Pinned Parameters Reference</h2>
+
+                <p>
+                    These are the GenICam node names most commonly pinned to the main panel.
+                    Pin any node by clicking the ★ icon next to it in the Advanced Parameters dialog.
+                </p>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Node name</th>
+                            <th>What it controls (plain language)</th>
+                            <th>Typical value</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>TriggerMode</code></td>
+                            <td>Hardware trigger on/off. <strong>On</strong> = camera waits for an external
+                                electrical pulse on the trigger line before capturing each frame.
+                                <strong>Off</strong> = camera free-runs at the set frame rate.
+                            </td>
+                            <td><code>On</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>TriggerSource</code></td>
+                            <td>Which GPIO input line the camera listens to for the frame trigger pulse.</td>
+                            <td><code>Line0</code> or <code>Line2</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>TriggerActivation</code></td>
+                            <td>Whether the trigger fires on the rising or falling edge of the input pulse.</td>
+                            <td><code>RisingEdge</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>AcquisitionFrameRateEnable</code></td>
+                            <td>Must be <strong>true</strong> to make <code>AcquisitionFrameRate</code> writable.
+                                Leave <strong>false</strong> when using external triggering — the node then
+                                becomes read-only and reports the sensor's current maximum rate given the active
+                                resolution and bit depth.</td>
+                            <td><code>false</code> (external trigger); <code>true</code> (internal)</td>
+                        </tr>
+                        <tr>
+                            <td><code>AcquisitionFrameRate</code></td>
+                            <td>When <code>AcquisitionFrameRateEnable</code> is <strong>false</strong>: read-only,
+                                reports the theoretical maximum for the current sensor config — this is the ceiling
+                                for external trigger pulses. When <strong>true</strong>: writable, sets the internal
+                                trigger rate. For external triggering, ensure your trigger source runs a few Hz
+                                below this ceiling so every pulse is accepted.</td>
+                            <td>Read-only @ 82 Hz (ext. trigger); set to 82 Hz (internal)</td>
+                        </tr>
+                        <tr>
+                            <td><code>ExposureTime</code></td>
+                            <td>How long the sensor integrates light for each frame, in microseconds.
+                                Must be less than the frame period (1 / frame rate).
+                                For scintillation capture from a ~20 µs quasi-CW x-ray pulse, the
+                                light event is over in tens of nanoseconds — longer exposure does
+                                <em>not</em> increase signal and only widens the integration window
+                                for dark current and stray light. Keep exposure short; frame rate
+                                reliability is the binding constraint, not brightness.
+                            </td>
+                            <td>&lt; 11,700 µs at 82 Hz; keep as short as the camera allows</td>
+                        </tr>
+                        <tr>
+                            <td><code>Gain</code></td>
+                            <td>Electronic amplification of the sensor signal, in dB. Higher gain increases
+                                brightness but also amplifies read noise. In practice, full beam is
+                                usually <em>too bright</em> at zero gain — pixel saturation is the
+                                more common problem. Keep gain ≤ 24 dB (the low-gain mode boundary;
+                                above 24 dB the camera switches to a noisier high-gain mode).
+                                The primary brightness control is the <strong>undulator gap</strong>:
+                                open it to reduce flux and prevent saturation, close it to increase
+                                photon counts. Set gain last, after the undulator gap is dialed in.</td>
+                            <td>0–24 dB (stay in low-gain mode); tune undulator gap first</td>
+                        </tr>
+                        <tr>
+                            <td><code>PixelFormat</code></td>
+                            <td>Bit depth and packing of the pixel data. <code>Mono8</code> = 8 bits/pixel
+                                (fast, low dynamic range). <code>Mono12</code> = 12 bits stored in 16 bits
+                                (better dynamic range). <code>Mono12Packed</code> = 12 bits tightly packed
+                                (higher throughput than Mono12).</td>
+                            <td><code>Mono12</code> or <code>Mono8</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>Width</code> / <code>Height</code></td>
+                            <td>Active image width and height in pixels. Reducing these (ROI) cuts data
+                                throughput proportionally, enabling higher frame rates.</td>
+                            <td>As required</td>
+                        </tr>
+                        <tr>
+                            <td><code>OffsetX</code> / <code>OffsetY</code></td>
+                            <td>Top-left corner of the active ROI in sensor pixels. Use Draw ROI in the
+                                preview window to set these graphically.</td>
+                            <td>Centred on region of interest</td>
+                        </tr>
+                        <tr>
+                            <td><code>BinningHorizontal</code> / <code>BinningVertical</code></td>
+                            <td>Combines N×N neighboring pixels into one output pixel. Reduces resolution but
+                                increases SNR and drastically reduces data throughput (2×2 = ¼ pixels).
+                                Values: 1 (off), 2, 4.</td>
+                            <td>1 (full res) or 2 (for high speed)</td>
+                        </tr>
+                        <tr>
+                            <td><code>ChunkModeActive</code></td>
+                            <td>Enables per-frame metadata (gain, exposure, GPIO states, timestamps) embedded
+                                in each frame. Required for <code>frame_data.csv</code> to be populated.
+                                Set once and save to Custom config.</td>
+                            <td><code>true</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <!-- ================================================================
+                 SCOPE & TIMING
+                 ================================================================ -->
+            <section id="scope" class="section">
+                <h2>Scope &amp; Event Trigger Timing</h2>
+
+                <p>
+                    Precise sub-frame event timing is recovered by combining the camera's per-frame GPIO state
+                    log with oscilloscope measurements of the trigger signals. This is the standard workflow
+                    for relating an external event (e.g., a stimulus, valve open, LED flash) to the exact
+                    frame in which it occurred.
+                </p>
+
+                <h3>Hardware setup</h3>
+                <ul>
+                    <li><strong>Scope 1</strong> is the oscilloscope used for this measurement — located
+                        just outside B station.</li>
+                    <li>Channel A: <strong>Event trigger</strong> signal (the stimulus or external event).</li>
+                    <li>Channel B: <strong>Camera frame trigger</strong> (the pulse that clocks each frame).</li>
+                    <li>Channel C (optional): <strong>Exposure Active</strong> output from the camera GPIO,
+                        confirming the camera is integrating during the expected window.</li>
+                    <li>Use <strong>ScopeControlv3.py</strong> (use <strong>Tools -> Scope Control Software</strong>
+                        menu bar button in the main window) to automate scope readout and saving.</li>
+                </ul>
+
+                <h3>Analysis approach</h3>
+                <ol>
+                    <li>From <code>frame_data.csv</code>, identify the frame(s) where <code>line_status_all</code>
+                        shows the event input line was high — these are the frames captured while the event was active.
+                    </li>
+                    <li>From the oscilloscope, read the time difference Δt between the <em>event trigger rising
+                            edge</em>
+                        and the <em>next camera frame trigger <strong>falling</strong> edge</em> after the event.</li>
+                    <li>The event occurred at time <strong>−Δt</strong> relative to the start of the first frame
+                        tagged as active. If Δt is small, the event happened just before that frame; if Δt is close
+                        to one frame period, the event happened just after the previous frame trigger.</li>
+                    <li>Cross-check using the camera's hardware <code>timestamp_ns</code> differences in
+                        <code>frame_data.csv</code> to confirm the inter-frame interval is consistent with the
+                        expected frame rate.
+                    </li>
+                </ol>
+
+                <div class="info">
+                    <strong>Why this works:</strong> The camera accepts an external frame trigger and, simultaneously,
+                    monitors a separate event trigger input line. Each frame's chunk data records the state of all
+                    GPIO lines at acquisition time — so you know which frame(s) overlap with the event.
+                    The oscilloscope provides the fine-grained sub-frame timing that the camera's frame rate
+                    alone cannot resolve.
+                </div>
+            </section>
+
+            <footer>
+                <p>Lucid Camera Acquisition Tool — Standard User Operations Checklist</p>
+                <p>Built with Qt 6 and Arena SDK | &copy; 2026 Lucid Vision Labs</p>
+            </footer>
+
+        </div>
+    </div>
+</body>
+
+</html>

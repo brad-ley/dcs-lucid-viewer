@@ -1,0 +1,1041 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>Camera Specifications &mdash; ATX245S 1.21.0.0 documentation</title>
+  
+
+  
+  
+  
+  
+
+  
+
+  
+  
+    
+
+  
+
+  
+  
+    <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  
+
+  
+  
+
+  
+        <link rel="index" title="Index"
+              href="genindex.html"/>
+        <link rel="search" title="Search" href="search.html"/>
+    <link rel="top" title="ATX245S 1.21.0.0 documentation" href="index.html"/>
+        <link rel="next" title="Camera Features" href="camera_features_atlas10.html"/>
+        <link rel="prev" title="Using the Camera" href="using_camera.html"/> 
+
+  
+  <script src="_static/js/modernizr.min.js"></script>
+
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+   
+  <div class="wy-grid-for-nav">
+
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search">
+          
+
+          
+            <a href="ExternalDoc.html" class="icon icon-home"> ATX245S
+          
+
+          
+            
+            <img src="../lucid-white-logo.png" class="logo" />
+          
+          </a>
+
+          
+            
+            
+              <div class="version">
+                1.21.0.0
+              </div>
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="welcome_page.html">Welcome!</a></li>
+<li class="toctree-l1"><a class="reference internal" href="safety_and_precautions_atlas10.html">Safety and Precautions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="contact_us.html">Contact Us</a></li>
+<li class="toctree-l1"><a class="reference internal" href="install_camera_hardware_atlas10.html">Installing the Camera Hardware</a></li>
+<li class="toctree-l1"><a class="reference internal" href="configure_host_camera.html">Configuring the Camera and Host System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="using_camera.html">Using the Camera</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Camera Specifications</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#power">Power</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#temperature">Temperature</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#gpio-characteristics">GPIO Characteristics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#gpio-schematics">GPIO Schematics</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#opto-isolated-input-gpio-line-0">Opto-isolated Input – GPIO Line 0</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#opto-isolated-output-gpio-line-1">Opto-isolated Output – GPIO Line 1</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#non-isolated-input-gpio-line-2">Non-isolated Input - GPIO Line 2</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#non-isolated-output-gpio-line-2">Non-isolated Output - GPIO Line 2</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#non-isolated-input-gpio-line-3">Non-isolated Input - GPIO Line 3</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#non-isolated-output-gpio-line-3">Non-isolated Output - GPIO Line 3</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#v-output">3.5V Output</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#led-status">LED Status</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#ir-filter">IR Filter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#shock-and-vibration">Shock and Vibration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#specification-tests">Specification Tests</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#fcc">FCC</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#rohs-reach-and-weee">RoHS, REACH, and WEEE</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#ce">CE</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#korea-communications-commission-kcc-statement">Korea Communications Commission (KCC) statement</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#open-source-software">Open Source Software</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="camera_features_atlas10.html">Camera Features</a></li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="CategoryDoc.html">Device Nodes</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" role="navigation" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="ExternalDoc.html">ATX245S</a>
+        
+      </nav>
+
+
+      
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="ExternalDoc.html">Docs</a> &raquo;</li>
+        
+      <li>Camera Specifications</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <div class="section" id="camera-specifications">
+<h1><a class="toc-backref" href="#id1">Camera Specifications</a><a class="headerlink" href="#camera-specifications" title="Permalink to this headline">¶</a></h1>
+<div class="contents topic" id="contents">
+<p class="topic-title first">Contents</p>
+<ul class="simple">
+<li><a class="reference internal" href="#camera-specifications" id="id1">Camera Specifications</a><ul>
+<li><a class="reference internal" href="#power" id="id2">Power</a></li>
+<li><a class="reference internal" href="#temperature" id="id3">Temperature</a></li>
+<li><a class="reference internal" href="#gpio-characteristics" id="id4">GPIO Characteristics</a></li>
+<li><a class="reference internal" href="#gpio-schematics" id="id5">GPIO Schematics</a><ul>
+<li><a class="reference internal" href="#opto-isolated-input-gpio-line-0" id="id6">Opto-isolated Input – GPIO Line 0</a></li>
+<li><a class="reference internal" href="#opto-isolated-output-gpio-line-1" id="id7">Opto-isolated Output – GPIO Line 1</a></li>
+<li><a class="reference internal" href="#non-isolated-input-gpio-line-2" id="id8">Non-isolated Input - GPIO Line 2</a></li>
+<li><a class="reference internal" href="#non-isolated-output-gpio-line-2" id="id9">Non-isolated Output - GPIO Line 2</a></li>
+<li><a class="reference internal" href="#non-isolated-input-gpio-line-3" id="id10">Non-isolated Input - GPIO Line 3</a></li>
+<li><a class="reference internal" href="#non-isolated-output-gpio-line-3" id="id11">Non-isolated Output - GPIO Line 3</a></li>
+<li><a class="reference internal" href="#v-output" id="id12">3.5V Output</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#led-status" id="id13">LED Status</a></li>
+<li><a class="reference internal" href="#ir-filter" id="id14">IR Filter</a></li>
+<li><a class="reference internal" href="#shock-and-vibration" id="id15">Shock and Vibration</a></li>
+<li><a class="reference internal" href="#specification-tests" id="id16">Specification Tests</a><ul>
+<li><a class="reference internal" href="#fcc" id="id17">FCC</a></li>
+<li><a class="reference internal" href="#rohs-reach-and-weee" id="id18">RoHS, REACH, and WEEE</a></li>
+<li><a class="reference internal" href="#ce" id="id19">CE</a></li>
+<li><a class="reference internal" href="#korea-communications-commission-kcc-statement" id="id20">Korea Communications Commission (KCC) statement</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#open-source-software" id="id21">Open Source Software</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="section" id="power">
+<h2><a class="toc-backref" href="#id2">Power</a><a class="headerlink" href="#power" title="Permalink to this headline">¶</a></h2>
+<p>The ATX245S can be powered via the Ethernet cable using Power over
+Ethernet (PoE) or the GPIO using the pins described in the GPIO Characteristics
+section.</p>
+<p>When using PoE, the power supply must comply with the IEEE 802.3at standard.
+You can find recommended parts to power the camera in our web store.</p>
+</div>
+<div class="section" id="temperature">
+<h2><a class="toc-backref" href="#id3">Temperature</a><a class="headerlink" href="#temperature" title="Permalink to this headline">¶</a></h2>
+<p>The ATX245S should be kept in the following storage, operating, and
+humidity conditions.</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="32%" />
+<col width="68%" />
+</colgroup>
+<tbody valign="top">
+<tr class="row-odd"><td>Storage Temperature</td>
+<td>-30 to 60°C</td>
+</tr>
+<tr class="row-even"><td>Operating Temperature</td>
+<td>-20 to 50°C ambient</td>
+</tr>
+<tr class="row-odd"><td>Humidity</td>
+<td>Operating: 20% ~ 80%, relative, non-condensing</td>
+</tr>
+</tbody>
+</table>
+<p>Placing the camera outside of these conditions may result in damage to the
+device.</p>
+<p>The ATX245S is equipped with a built-in temperature sensor that can be
+read by reading the DeviceTemperature property.</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="11%" />
+<col width="89%" />
+</colgroup>
+<tbody valign="top">
+<tr class="row-odd"><td><a class="reference internal" href="_images/help_icon.png"><img alt="help" src="_images/help_icon.png" style="width: 70px;" /></a></td>
+<td>The camera can get hot to touch if it has been streaming images
+for an extended period of time.</td>
+</tr>
+</tbody>
+</table>
+<table border="1" class="docutils">
+<colgroup>
+<col width="10%" />
+<col width="90%" />
+</colgroup>
+<tbody valign="top">
+<tr class="row-odd"><td><a class="reference internal" href="_images/help_icon.png"><img alt="help" src="_images/help_icon.png" style="width: 70px;" /></a></td>
+<td>DeviceTemperature can show values outside of the operating temperature
+range. This is generally acceptable as long as the camera is kept within
+the stated operating temperature range.</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="section" id="gpio-characteristics">
+<h2><a class="toc-backref" href="#id4">GPIO Characteristics</a><a class="headerlink" href="#gpio-characteristics" title="Permalink to this headline">¶</a></h2>
+<p><strong>GPIO Pinout Diagram</strong></p>
+<a class="reference internal image-reference" href="_images/m8.png"><img alt="_images/m8.png" src="_images/m8.png" style="width: 400px;" /></a>
+<p>The GPIO connector as seen from the rear of the ATX245S.
+Pin colors correspond to <a class="reference external" href="https://thinklucid.com/product/m8-gpio-8-pin-1m-cable/">GPIO-M8</a> cable from Lucid Vision Labs.</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="21%" />
+<col width="79%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Pin Number</th>
+<th class="head">Pin Description</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>1 (Red)</td>
+<td>V<sub>AUX</sub> (12-24V DC Power Input)</td>
+</tr>
+<tr class="row-odd"><td>2 (Brown)</td>
+<td>Non-isolated bi-directional GPIO channel (Line 2)</td>
+</tr>
+<tr class="row-even"><td>3 (Orange)</td>
+<td>V<sub>DD</sub> GPIO (3.5V Power Output) (Line 4)</td>
+</tr>
+<tr class="row-odd"><td>4 (Purple)</td>
+<td>Non-isolated bi-directional GPIO channel (Line 3)</td>
+</tr>
+<tr class="row-even"><td>5 (Black)</td>
+<td>GND (Camera GND)</td>
+</tr>
+<tr class="row-odd"><td>6 (Blue)</td>
+<td>OPTO GND (Opto-isolated Reference)</td>
+</tr>
+<tr class="row-even"><td>7 (Yellow)</td>
+<td>OPTO OUT (Opto-isolated Output) (Line 1)</td>
+</tr>
+<tr class="row-odd"><td>8 (Green)</td>
+<td>OPTO IN (Opto-isolated Input) (Line 0)</td>
+</tr>
+</tbody>
+</table>
+<p>Maximum supported input voltage: 24V</p>
+<p>Maximum supported output voltage: 24V</p>
+<p>Consult the Turning on GPIO Voltage Output section for enabling V<sub>DD</sub>.</p>
+</div>
+<div class="section" id="gpio-schematics">
+<h2><a class="toc-backref" href="#id5">GPIO Schematics</a><a class="headerlink" href="#gpio-schematics" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="opto-isolated-input-gpio-line-0">
+<h3><a class="toc-backref" href="#id6">Opto-isolated Input – GPIO Line 0</a><a class="headerlink" href="#opto-isolated-input-gpio-line-0" title="Permalink to this headline">¶</a></h3>
+<a class="reference internal image-reference" href="_images/gpio_line_0_input.png"><img alt="_images/gpio_line_0_input.png" src="_images/gpio_line_0_input.png" style="width: 1000px;" /></a>
+<p>Opto-isolated Input Measurements:</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Voltage (V)</th>
+<th class="head">Max Rise Delay (us)</th>
+<th class="head">Max Fall Delay (us)</th>
+<th class="head">Max Rise Time (us)</th>
+<th class="head">Max Fall Time (us)</th>
+<th class="head">Min Pulse Input (us)</th>
+<th class="head">Min Input High (V)</th>
+<th class="head">Min Input Low (V)</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>2.5</td>
+<td>1</td>
+<td>1</td>
+<td>1</td>
+<td>1</td>
+<td>2</td>
+<td>2.5</td>
+<td>1.0</td>
+</tr>
+<tr class="row-odd"><td>5</td>
+<td>1</td>
+<td>1</td>
+<td>1</td>
+<td>1</td>
+<td>2</td>
+<td>2.5</td>
+<td>1.0</td>
+</tr>
+</tbody>
+</table>
+<p>Sample values measured at room temperature. Results may vary with the temperature and setup.</p>
+<p>Maximum supported input voltage: 24V</p>
+</div>
+<div class="section" id="opto-isolated-output-gpio-line-1">
+<h3><a class="toc-backref" href="#id7">Opto-isolated Output – GPIO Line 1</a><a class="headerlink" href="#opto-isolated-output-gpio-line-1" title="Permalink to this headline">¶</a></h3>
+<a class="reference internal image-reference" href="_images/gpio_line_1_output.png"><img alt="_images/gpio_line_1_output.png" src="_images/gpio_line_1_output.png" style="width: 1000px;" /></a>
+<p>Opto-isolated Output Measurements:</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Voltage (V)</th>
+<th class="head">External Resistor (Ω)</th>
+<th class="head">Max Rise Delay (us)</th>
+<th class="head">Max Fall Delay (us)</th>
+<th class="head">Max Rise Time (us)</th>
+<th class="head">Max Fall Time (us)</th>
+<th class="head">Current (mA)</th>
+<th class="head">Low Level (V)</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>2.5</td>
+<td>150</td>
+<td>50</td>
+<td>5</td>
+<td>40</td>
+<td>5</td>
+<td>5.7</td>
+<td>0.9</td>
+</tr>
+<tr class="row-odd"><td>2.5</td>
+<td>330</td>
+<td>50</td>
+<td>5</td>
+<td>40</td>
+<td>5</td>
+<td>2.9</td>
+<td>0.8</td>
+</tr>
+<tr class="row-even"><td>2.5</td>
+<td>560</td>
+<td>50</td>
+<td>5</td>
+<td>40</td>
+<td>5</td>
+<td>1.9</td>
+<td>0.5</td>
+</tr>
+<tr class="row-odd"><td>2.5</td>
+<td>1k</td>
+<td>50</td>
+<td>5</td>
+<td>40</td>
+<td>5</td>
+<td>1.2</td>
+<td>0.3</td>
+</tr>
+<tr class="row-even"><td>5</td>
+<td>330</td>
+<td>50</td>
+<td>5</td>
+<td>50</td>
+<td>5</td>
+<td>6.6</td>
+<td>0.9</td>
+</tr>
+<tr class="row-odd"><td>5</td>
+<td>560</td>
+<td>50</td>
+<td>5</td>
+<td>50</td>
+<td>5</td>
+<td>4</td>
+<td>0.7</td>
+</tr>
+<tr class="row-even"><td>5</td>
+<td>1k</td>
+<td>50</td>
+<td>5</td>
+<td>50</td>
+<td>5</td>
+<td>2.4</td>
+<td>0.5</td>
+</tr>
+<tr class="row-odd"><td>5</td>
+<td>1.8k</td>
+<td>50</td>
+<td>5</td>
+<td>50</td>
+<td>5</td>
+<td>1.4</td>
+<td>0.4</td>
+</tr>
+<tr class="row-even"><td>12</td>
+<td>1k</td>
+<td>50</td>
+<td>5</td>
+<td>60</td>
+<td>5</td>
+<td>6</td>
+<td>0.9</td>
+</tr>
+<tr class="row-odd"><td>12</td>
+<td>1.8k</td>
+<td>50</td>
+<td>5</td>
+<td>60</td>
+<td>5</td>
+<td>3.4</td>
+<td>0.9</td>
+</tr>
+<tr class="row-even"><td>12</td>
+<td>2.7k</td>
+<td>50</td>
+<td>5</td>
+<td>60</td>
+<td>5</td>
+<td>2.4</td>
+<td>0.7</td>
+</tr>
+<tr class="row-odd"><td>12</td>
+<td>4.7k</td>
+<td>50</td>
+<td>5</td>
+<td>60</td>
+<td>5</td>
+<td>1.5</td>
+<td>0.5</td>
+</tr>
+<tr class="row-even"><td>24</td>
+<td>1.8k</td>
+<td>60</td>
+<td>5</td>
+<td>60</td>
+<td>5</td>
+<td>7.1</td>
+<td>0.9</td>
+</tr>
+<tr class="row-odd"><td>24</td>
+<td>2.7k</td>
+<td>60</td>
+<td>5</td>
+<td>60</td>
+<td>5</td>
+<td>4.7</td>
+<td>0.9</td>
+</tr>
+<tr class="row-even"><td>24</td>
+<td>4.7k</td>
+<td>60</td>
+<td>5</td>
+<td>60</td>
+<td>5</td>
+<td>2.8</td>
+<td>0.7</td>
+</tr>
+<tr class="row-odd"><td>24</td>
+<td>6.8k</td>
+<td>60</td>
+<td>5</td>
+<td>60</td>
+<td>5</td>
+<td>2.1</td>
+<td>0.6</td>
+</tr>
+</tbody>
+</table>
+<p>Sample values measured at room temperature. Results may vary with the temperature and setup.</p>
+<p>Maximum supported output voltage: 24V</p>
+</div>
+<div class="section" id="non-isolated-input-gpio-line-2">
+<h3><a class="toc-backref" href="#id8">Non-isolated Input - GPIO Line 2</a><a class="headerlink" href="#non-isolated-input-gpio-line-2" title="Permalink to this headline">¶</a></h3>
+<a class="reference internal image-reference" href="_images/gpio_line_2_input.png"><img alt="_images/gpio_line_2_input.png" src="_images/gpio_line_2_input.png" style="width: 1000px;" /></a>
+<p>Non-isolated Input Measurements:</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Voltage (V)</th>
+<th class="head">Max Rise Delay (us)</th>
+<th class="head">Max Fall Delay (us)</th>
+<th class="head">Max Rise Time (us)</th>
+<th class="head">Max Fall Time (us)</th>
+<th class="head">Min Pulse Input (us)</th>
+<th class="head">Min Input High (V)</th>
+<th class="head">Min Input Low (V)</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>2.5</td>
+<td>1</td>
+<td>1</td>
+<td>1</td>
+<td>1</td>
+<td>2</td>
+<td>2.5</td>
+<td>0.5</td>
+</tr>
+<tr class="row-odd"><td>5</td>
+<td>1</td>
+<td>1</td>
+<td>1</td>
+<td>1</td>
+<td>2</td>
+<td>2.5</td>
+<td>0.5</td>
+</tr>
+</tbody>
+</table>
+<p>Typical values measured at room temperature. Results may vary with temperature.</p>
+<p>Maximum supported input voltage: 24V</p>
+</div>
+<div class="section" id="non-isolated-output-gpio-line-2">
+<h3><a class="toc-backref" href="#id9">Non-isolated Output - GPIO Line 2</a><a class="headerlink" href="#non-isolated-output-gpio-line-2" title="Permalink to this headline">¶</a></h3>
+<a class="reference internal image-reference" href="_images/gpio_line_2_output.png"><img alt="_images/gpio_line_2_output.png" src="_images/gpio_line_2_output.png" style="width: 1000px;" /></a>
+<p>Non-isolated Output Measurements:</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+<col width="13%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Voltage (V)</th>
+<th class="head">External Resistor (Ω)</th>
+<th class="head">Max Rise Delay (us)</th>
+<th class="head">Max Fall Delay (us)</th>
+<th class="head">Max Rise Time (us)</th>
+<th class="head">Max Fall Time (us)</th>
+<th class="head">Current (mA)</th>
+<th class="head">Low Level (V)</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>2.5</td>
+<td>150</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>1</td>
+<td>0.5</td>
+<td>4.3</td>
+<td>1.3</td>
+</tr>
+<tr class="row-odd"><td>2.5</td>
+<td>330</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>1</td>
+<td>0.5</td>
+<td>2.6</td>
+<td>1</td>
+</tr>
+<tr class="row-even"><td>2.5</td>
+<td>560</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>1</td>
+<td>0.5</td>
+<td>1.8</td>
+<td>0.8</td>
+</tr>
+<tr class="row-odd"><td>2.5</td>
+<td>1k</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>1</td>
+<td>0.5</td>
+<td>1.1</td>
+<td>0.6</td>
+</tr>
+<tr class="row-even"><td>5</td>
+<td>330</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>1</td>
+<td>0.5</td>
+<td>5.6</td>
+<td>1.4</td>
+</tr>
+<tr class="row-odd"><td>5</td>
+<td>560</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>1</td>
+<td>0.5</td>
+<td>3.7</td>
+<td>1.1</td>
+</tr>
+<tr class="row-even"><td>5</td>
+<td>1k</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>1</td>
+<td>0.5</td>
+<td>2.3</td>
+<td>0.9</td>
+</tr>
+<tr class="row-odd"><td>5</td>
+<td>1.8k</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>1</td>
+<td>0.5</td>
+<td>1.4</td>
+<td>0.7</td>
+</tr>
+<tr class="row-even"><td>12</td>
+<td>1k</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>1</td>
+<td>0.5</td>
+<td>5.5</td>
+<td>1.4</td>
+</tr>
+<tr class="row-odd"><td>12</td>
+<td>1.8k</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>1</td>
+<td>0.5</td>
+<td>3.2</td>
+<td>0.9</td>
+</tr>
+<tr class="row-even"><td>12</td>
+<td>2.7k</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>1</td>
+<td>0.5</td>
+<td>2.3</td>
+<td>0.9</td>
+</tr>
+<tr class="row-odd"><td>12</td>
+<td>4.7k</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>1</td>
+<td>0.5</td>
+<td>1.5</td>
+<td>0.7</td>
+</tr>
+<tr class="row-even"><td>24</td>
+<td>1.8k</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>2</td>
+<td>0.5</td>
+<td>6.5</td>
+<td>1.6</td>
+</tr>
+<tr class="row-odd"><td>24</td>
+<td>2.7k</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>2</td>
+<td>0.5</td>
+<td>4.5</td>
+<td>1.3</td>
+</tr>
+<tr class="row-even"><td>24</td>
+<td>4.7k</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>2</td>
+<td>0.5</td>
+<td>2.6</td>
+<td>0.9</td>
+</tr>
+<tr class="row-odd"><td>24</td>
+<td>6.8k</td>
+<td>0.5</td>
+<td>0.5</td>
+<td>2</td>
+<td>0.5</td>
+<td>1.8</td>
+<td>0.8</td>
+</tr>
+</tbody>
+</table>
+<p>Typical values measured at room temperature. Results may vary with temperature.</p>
+<p>Maximum supported output voltage: 24V</p>
+</div>
+<div class="section" id="non-isolated-input-gpio-line-3">
+<h3><a class="toc-backref" href="#id10">Non-isolated Input - GPIO Line 3</a><a class="headerlink" href="#non-isolated-input-gpio-line-3" title="Permalink to this headline">¶</a></h3>
+<p>Same as Non-isolated Input – GPIO Line 2 (GPIO_IN is Pin 4, GND is Pin 5)</p>
+</div>
+<div class="section" id="non-isolated-output-gpio-line-3">
+<h3><a class="toc-backref" href="#id11">Non-isolated Output - GPIO Line 3</a><a class="headerlink" href="#non-isolated-output-gpio-line-3" title="Permalink to this headline">¶</a></h3>
+<p>Same as Non-isolated Output – GPIO Line 2 (GPIO_OUT is Pin 4, GND is Pin 5)</p>
+</div>
+<div class="section" id="v-output">
+<h3><a class="toc-backref" href="#id12">3.5V Output</a><a class="headerlink" href="#v-output" title="Permalink to this headline">¶</a></h3>
+<a class="reference internal image-reference" href="_images/voltage_external_output_3V5.png"><img alt="_images/voltage_external_output_3V5.png" src="_images/voltage_external_output_3V5.png" style="width: 1000px;" /></a>
+</div>
+</div>
+<div class="section" id="led-status">
+<h2><a class="toc-backref" href="#id13">LED Status</a><a class="headerlink" href="#led-status" title="Permalink to this headline">¶</a></h2>
+<p>The ATX245S camera is equipped with an LED that identifies the current
+state of the camera.</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="21%" />
+<col width="79%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">LED Status</th>
+<th class="head">Status Information</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>Flashing red</td>
+<td>Camera powered, but no Ethernet link established.</td>
+</tr>
+<tr class="row-odd"><td>Flashing green</td>
+<td>Camera powered, Ethernet link established, but no network traffic.</td>
+</tr>
+<tr class="row-even"><td>Solid green</td>
+<td>Camera powered, Ethernet link established, and there is network traffic.</td>
+</tr>
+<tr class="row-odd"><td>Flashing red/green</td>
+<td>Firmware update in progress.</td>
+</tr>
+<tr class="row-even"><td>Solid red</td>
+<td>Error. Firmware update failed.</td>
+</tr>
+</tbody>
+</table>
+<p>The following LED sequence occurs when the camera is powered up and connected
+to a network:</p>
+<ol class="arabic simple">
+<li>LED off, plug in the Ethernet cable.</li>
+<li>LED on, flashing red.</li>
+<li>After link is established, LED becomes flashing green.</li>
+<li>Launch application and start capturing images, LED becomes solid green.</li>
+</ol>
+<p>The status LED can also be controlled using the DeviceIndicatorMode
+property. Possible values are:</p>
+<ul class="simple">
+<li>Inactive: LED is off.</li>
+<li>Active: LED indicates camera status according to the above table.</li>
+</ul>
+</div>
+<div class="section" id="ir-filter">
+<h2><a class="toc-backref" href="#id14">IR Filter</a><a class="headerlink" href="#ir-filter" title="Permalink to this headline">¶</a></h2>
+<p>Color cameras from Lucid Vision Labs are equipped with an IR filter that is installed
+under the gasket of the mount. Mono cameras are equipped with a transparent glass
+window instead of an IR filter. The dimensions of the IR filter / transparent
+glass window are as follows:</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="51%" />
+<col width="29%" />
+<col width="20%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Model</th>
+<th class="head">Size</th>
+<th class="head">Thickness</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>55 x 55 mm Atlas TFL-Mount</td>
+<td>27.3 x 22.3 mm</td>
+<td>1 mm</td>
+</tr>
+<tr class="row-odd"><td>55 x 55 mm Atlas C-Mount</td>
+<td>18 x 14.5 mm</td>
+<td>1 mm</td>
+</tr>
+</tbody>
+</table>
+<img alt="_images/ir_transmittance_atlas.png" src="_images/ir_transmittance_atlas.png" />
+<p>The IR filter and transparent glass window have anti-reflective coating on one side.</p>
+</div>
+<div class="section" id="shock-and-vibration">
+<h2><a class="toc-backref" href="#id15">Shock and Vibration</a><a class="headerlink" href="#shock-and-vibration" title="Permalink to this headline">¶</a></h2>
+<p>Shock and vibration testing for Atlas10 cameras to the standards listed on their product pages (<a class="reference external" href="https://thinklucid.com/atlas10-10gige-poe-pregius-s/">https://thinklucid.com/atlas10-10gige-poe-pregius-s/</a>) is still in progress, and is subject to change.</p>
+</div>
+<div class="section" id="specification-tests">
+<h2><a class="toc-backref" href="#id16">Specification Tests</a><a class="headerlink" href="#specification-tests" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="fcc">
+<h3><a class="toc-backref" href="#id17">FCC</a><a class="headerlink" href="#fcc" title="Permalink to this headline">¶</a></h3>
+<p>This product has been tested and complies with the limits for a Class A digital
+device, pursuant to Part 15 of the FCC Rules. These limits are designed to provide
+reasonable protection against harmful interference when the equipment is operated
+in a commercial environment. This equipment generates, uses, and can radiate radio
+frequency energy and, if not installed and used in accordance with the instruction
+manual, may cause harmful interference to radio communications. Operation of this
+equipment in a residential area is likely to cause harmful interference, in which
+case the user will be required to correct the interference at his own expense.</p>
+<p>Users are advised that any changes or modifications not approved by Lucid Vision Labs
+will void the FCC compliance. The product is intended to be used as a component of
+a larger system, hence users are advised that cable and other peripherals may affect
+overall system FCC compliance.</p>
+</div>
+<div class="section" id="rohs-reach-and-weee">
+<h3><a class="toc-backref" href="#id18">RoHS, REACH, and WEEE</a><a class="headerlink" href="#rohs-reach-and-weee" title="Permalink to this headline">¶</a></h3>
+<p>Lucid Vision Labs declares the ATX245S camera is in conformity with the
+following directives:</p>
+<ul class="simple">
+<li>RoHS 2015/863/EU</li>
+<li>REACH 1907/2006/EC</li>
+<li>WEEE 2012/19/EC</li>
+</ul>
+</div>
+<div class="section" id="ce">
+<h3><a class="toc-backref" href="#id19">CE</a><a class="headerlink" href="#ce" title="Permalink to this headline">¶</a></h3>
+<p>Lucid Vision Labs declares the ATX245S meets requirements necessary for CE
+marking. The product complies with the requirements of the directives listed
+below:</p>
+<ul class="simple">
+<li>EN 55032:2012 Electromagnetic compatibility of multimedia equipment - Emission requirements</li>
+<li>EN 61000-3-2:2014 Harmonic Current Emissions</li>
+<li>EN 61000-3-3:2013 Voltage Fluctuations and Flicker</li>
+<li>EN 61000-4-2:2008 Electrostatic Discharge</li>
+<li>EN 61000-4-3:2010 Radiated RF Immunity</li>
+<li>EN 61000-4-4:2012 Electrical Fast Transient/Burst</li>
+<li>EN 61000-4-5:2014 Surge Transient</li>
+<li>EN 61000-4-6:2013 Conducted Immunity</li>
+<li>EN 61000-4-8:2009 Power Frequency Magnetic Field</li>
+<li>EN 61000-4-11:2004 Voltage Dips and Interruptions</li>
+</ul>
+</div>
+<div class="section" id="korea-communications-commission-kcc-statement">
+<h3><a class="toc-backref" href="#id20">Korea Communications Commission (KCC) statement</a><a class="headerlink" href="#korea-communications-commission-kcc-statement" title="Permalink to this headline">¶</a></h3>
+<a class="reference internal image-reference" href="_images/kcc-class-a1.png"><img alt="_images/kcc-class-a1.png" src="_images/kcc-class-a1.png" style="width: 200px;" /></a>
+<p>Class A Equipment (Industrial Broadcasting &amp; Equipment)</p>
+<a class="reference internal image-reference" href="_images/kcc-class-a2.png"><img alt="_images/kcc-class-a2.png" src="_images/kcc-class-a2.png" style="width: 400px;" /></a>
+<p>This is electromagnetic wave compatibility equipment for business (Class A).
+Sellers and users need to pay attention to it. This is for any areas other
+than home.</p>
+</div>
+</div>
+<div class="section" id="open-source-software">
+<h2><a class="toc-backref" href="#id21">Open Source Software</a><a class="headerlink" href="#open-source-software" title="Permalink to this headline">¶</a></h2>
+<p>The camera uses the following open source software:</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="43%" />
+<col width="57%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Library</th>
+<th class="head">License Link</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>lwip (lwip ethernet stack)</td>
+<td><a class="reference external" href="http://lwip.wikia.com/wiki/License">http://lwip.wikia.com/wiki/License</a></td>
+</tr>
+<tr class="row-odd"><td>freeRTOS</td>
+<td><a class="reference external" href="http://www.freertos.org/a00114.html">http://www.freertos.org/a00114.html</a></td>
+</tr>
+<tr class="row-even"><td>zlib</td>
+<td><a class="reference external" href="https://zlib.net/zlib_license.html">https://zlib.net/zlib_license.html</a></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+
+
+           </div>
+           <div class="articleComments">
+            
+           </div>
+          </div>
+          <footer>
+  
+    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
+      
+        <a href="camera_features_atlas10.html" class="btn btn-neutral float-right" title="Camera Features" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right"></span></a>
+      
+      
+        <a href="using_camera.html" class="btn btn-neutral" title="Using the Camera" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left"></span> Previous</a>
+      
+    </div>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2023, Lucid Vision Labs.
+
+    </p>
+  </div> 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  
+
+    <script type="text/javascript">
+        var DOCUMENTATION_OPTIONS = {
+            URL_ROOT:'./',
+            VERSION:'1.21.0.0',
+            COLLAPSE_INDEX:false,
+            FILE_SUFFIX:'.html',
+            HAS_SOURCE:  true,
+            SOURCELINK_SUFFIX: '.txt'
+        };
+    </script>
+      <script type="text/javascript" src="_static/jquery.js"></script>
+      <script type="text/javascript" src="_static/underscore.js"></script>
+      <script type="text/javascript" src="_static/doctools.js"></script>
+      <script type="text/javascript" src="_static/examplecode.js"></script>
+
+  
+
+  
+  
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+  
+
+  
+  
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.StickyNav.enable();
+      });
+  </script>
+   
+
+</body>
+</html>

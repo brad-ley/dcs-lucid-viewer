@@ -1,0 +1,11 @@
+// app.rc — Windows resource script
+//
+// This file is compiled by the MSVC resource compiler (rc.exe) and linked
+// into the .exe. It tells Windows which .ico file to use as the executable's
+// icon — the one shown in File Explorer, the taskbar, and Alt+Tab.
+//
+// IDI_ICON1 is the conventional ID for the main application icon.
+// Windows picks the icon with the lowest numeric ID as the "default" icon,
+// so using 1 (IDI_ICON1) ensures this icon is always chosen.
+
+IDI_ICON1 ICON "assets/app.ico"

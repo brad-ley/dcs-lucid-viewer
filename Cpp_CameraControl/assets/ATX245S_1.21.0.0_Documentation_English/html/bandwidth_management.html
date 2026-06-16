@@ -1,0 +1,300 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>Bandwidth Management &mdash; ATX245S 1.21.0.0 documentation</title>
+  
+
+  
+  
+  
+  
+
+  
+
+  
+  
+    
+
+  
+
+  
+  
+    <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  
+
+  
+  
+
+  
+        <link rel="index" title="Index"
+              href="genindex.html"/>
+        <link rel="search" title="Search" href="search.html"/>
+    <link rel="top" title="ATX245S 1.21.0.0 documentation" href="index.html"/> 
+
+  
+  <script src="_static/js/modernizr.min.js"></script>
+
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+   
+  <div class="wy-grid-for-nav">
+
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search">
+          
+
+          
+            <a href="ExternalDoc.html" class="icon icon-home"> ATX245S
+          
+
+          
+            
+            <img src="../lucid-white-logo.png" class="logo" />
+          
+          </a>
+
+          
+            
+            
+              <div class="version">
+                1.21.0.0
+              </div>
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <ul>
+<li class="toctree-l1"><a class="reference internal" href="welcome_page.html">Welcome!</a></li>
+<li class="toctree-l1"><a class="reference internal" href="safety_and_precautions_atlas10.html">Safety and Precautions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="contact_us.html">Contact Us</a></li>
+<li class="toctree-l1"><a class="reference internal" href="install_camera_hardware_atlas10.html">Installing the Camera Hardware</a></li>
+<li class="toctree-l1"><a class="reference internal" href="configure_host_camera.html">Configuring the Camera and Host System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="using_camera.html">Using the Camera</a></li>
+<li class="toctree-l1"><a class="reference internal" href="camera_specification_atlas10.html">Camera Specifications</a></li>
+<li class="toctree-l1"><a class="reference internal" href="camera_features_atlas10.html">Camera Features</a></li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="CategoryDoc.html">Device Nodes</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" role="navigation" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="ExternalDoc.html">ATX245S</a>
+        
+      </nav>
+
+
+      
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="ExternalDoc.html">Docs</a> &raquo;</li>
+        
+      <li>Bandwidth Management</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <div class="section" id="bandwidth-management">
+<h1>Bandwidth Management<a class="headerlink" href="#bandwidth-management" title="Permalink to this headline">¶</a></h1>
+<div class="section" id="jumbo-frames">
+<h2>Jumbo Frames<a class="headerlink" href="#jumbo-frames" title="Permalink to this headline">¶</a></h2>
+<p>Lucid recommends enabling jumbo frames on your Ethernet adapter. A
+jumbo frame is an Ethernet frame that is larger than 1500 bytes. Most Ethernet
+adapters support jumbo frames, however it is usually turned off by default.</p>
+<p>Enabling jumbo frames on the Ethernet adapter allows a packet size of
+up to 9000 bytes to be set on the ATX245S. The larger packet size will
+enable optimal performance on high-bandwidth cameras, and it usually reduces
+CPU load on the host system. Please note in order to set a 9000 byte packet size
+on the camera, the Ethernet adapter must support a jumbo frame size of 9000
+bytes or higher.</p>
+<p>The following table are some of the Ethernet adapters that Lucid Vision Labs has
+tested:</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="54%" />
+<col width="46%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Product Name</th>
+<th class="head">Maximum Jumbo Frame Size</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>ADLINK PCIe-GIE64+</td>
+<td>9000</td>
+</tr>
+<tr class="row-odd"><td>Neousys PCIe-PoE354at</td>
+<td>9500</td>
+</tr>
+<tr class="row-even"><td>Intel EXPI9301CT (non-POE)</td>
+<td>9000</td>
+</tr>
+<tr class="row-odd"><td>ioi GE10P-PCIE4XG301</td>
+<td>16000</td>
+</tr>
+<tr class="row-even"><td>ioi DGEAP2X-PCIE8XG302</td>
+<td>16000</td>
+</tr>
+</tbody>
+</table>
+<p>If you still experience issues such as lost packets or dropped frames, you
+can also try:</p>
+<ul class="simple">
+<li>Updating the Ethernet adapter driver (you may need to enable jumbo frames again after updating).</li>
+<li>Increasing the receive buffer size in your Ethernet adapter properties.</li>
+<li>Reducing the DeviceLinkThroughputLimit value (this may reduce maximum frame rate).</li>
+</ul>
+</div>
+<div class="section" id="receive-buffers">
+<h2>Receive Buffers<a class="headerlink" href="#receive-buffers" title="Permalink to this headline">¶</a></h2>
+<p>A receive buffer is the size of system memory that can be used by the Ethernet
+adapter to receive packets. Some Ethernet adapter drivers or the operating
+system itself may set the receive buffer value to a low value by default, which
+may result in decreased performance. Increasing the receive buffer size,
+however, will also increase system memory usage.</p>
+</div>
+<div class="section" id="device-link-throughput-limit">
+<h2>Device Link Throughput Limit<a class="headerlink" href="#device-link-throughput-limit" title="Permalink to this headline">¶</a></h2>
+<p>The Device Link Throughput Limit is the maximum available bandwidth for
+transmission of data represented in bytes per second. This can be used to
+control the amount of bandwidth used by the camera. The maximum available
+frame rate may decrease when this value is lowered since less bandwidth is
+available for transmission.</p>
+</div>
+</div>
+
+
+           </div>
+           <div class="articleComments">
+            
+           </div>
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2023, Lucid Vision Labs.
+
+    </p>
+  </div> 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  
+
+    <script type="text/javascript">
+        var DOCUMENTATION_OPTIONS = {
+            URL_ROOT:'./',
+            VERSION:'1.21.0.0',
+            COLLAPSE_INDEX:false,
+            FILE_SUFFIX:'.html',
+            HAS_SOURCE:  true,
+            SOURCELINK_SUFFIX: '.txt'
+        };
+    </script>
+      <script type="text/javascript" src="_static/jquery.js"></script>
+      <script type="text/javascript" src="_static/underscore.js"></script>
+      <script type="text/javascript" src="_static/doctools.js"></script>
+      <script type="text/javascript" src="_static/examplecode.js"></script>
+
+  
+
+  
+  
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+  
+
+  
+  
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.StickyNav.enable();
+      });
+  </script>
+   
+
+</body>
+</html>

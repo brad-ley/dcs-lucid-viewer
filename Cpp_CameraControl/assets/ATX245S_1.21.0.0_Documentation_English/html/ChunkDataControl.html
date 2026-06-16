@@ -1,0 +1,349 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>Chunk Data Control &mdash; ATX245S 1.21.0.0 documentation</title>
+  
+
+  
+  
+  
+  
+
+  
+
+  
+  
+    
+
+  
+
+  
+  
+    <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  
+
+  
+  
+
+  
+        <link rel="index" title="Index"
+              href="genindex.html"/>
+        <link rel="search" title="Search" href="search.html"/>
+    <link rel="top" title="ATX245S 1.21.0.0 documentation" href="index.html"/>
+        <link rel="up" title="Device Nodes" href="CategoryDoc.html"/>
+        <link rel="next" title="Color Transformation Control" href="ColorTransformationControl.html"/>
+        <link rel="prev" title="AWB AOI" href="AwbAOI.html"/> 
+
+  
+  <script src="_static/js/modernizr.min.js"></script>
+
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+   
+  <div class="wy-grid-for-nav">
+
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search">
+          
+
+          
+            <a href="ExternalDoc.html" class="icon icon-home"> ATX245S
+          
+
+          
+            
+            <img src="../lucid-white-logo.png" class="logo" />
+          
+          </a>
+
+          
+            
+            
+              <div class="version">
+                1.21.0.0
+              </div>
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <ul>
+<li class="toctree-l1"><a class="reference internal" href="welcome_page.html">Welcome!</a></li>
+<li class="toctree-l1"><a class="reference internal" href="safety_and_precautions_atlas10.html">Safety and Precautions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="contact_us.html">Contact Us</a></li>
+<li class="toctree-l1"><a class="reference internal" href="install_camera_hardware_atlas10.html">Installing the Camera Hardware</a></li>
+<li class="toctree-l1"><a class="reference internal" href="configure_host_camera.html">Configuring the Camera and Host System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="using_camera.html">Using the Camera</a></li>
+<li class="toctree-l1"><a class="reference internal" href="camera_specification_atlas10.html">Camera Specifications</a></li>
+<li class="toctree-l1"><a class="reference internal" href="camera_features_atlas10.html">Camera Features</a></li>
+</ul>
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal" href="CategoryDoc.html">Device Nodes</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="AcquisitionControl.html">Acquisition Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ActionControl.html">Action Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="AnalogControl.html">Analog Control</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Chunk Data Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ColorTransformationControl.html">Color Transformation Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="CounterAndTimerControl.html">Counter And Timer Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="DefectCorrectionControl.html">Defect Correction Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="DeviceControl.html">Device Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="DigitalIOControl.html">Digital IO Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="EventControl.html">Event Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="FileAccessControl.html">File Access Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="I2CAccessControl.html">I2C Access Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ImageFormatControl.html">Image Format Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="LUTControl.html">LUT Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="SequencerControl.html">Sequencer Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="SerialAccessControl.html">Serial Access Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ShadingCorrectionControl.html">Shading Correction Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="SoftwareSignalControl.html">Software Signal Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TestControl.html">Test Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TransferControl.html">Transfer Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TransportLayerControl.html">Transport Layer Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="UserSetControl.html">User Set Control</a></li>
+</ul>
+</li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" role="navigation" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="ExternalDoc.html">ATX245S</a>
+        
+      </nav>
+
+
+      
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="ExternalDoc.html">Docs</a> &raquo;</li>
+        
+          <li><a href="CategoryDoc.html">Device Nodes</a> &raquo;</li>
+        
+      <li>Chunk Data Control</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <div class="section" id="chunk-data-control">
+<h1>Chunk Data Control<a class="headerlink" href="#chunk-data-control" title="Permalink to this headline">¶</a></h1>
+<table border="1" class="docutils">
+<colgroup>
+<col width="50%" />
+<col width="50%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Node Name</th>
+<th class="head">Description</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>ChunkModeActive</td>
+<td>Activates the inclusion of Chunk data in the payload of the image.</td>
+</tr>
+<tr class="row-odd"><td>ChunkSelector</td>
+<td>Selects which Chunk to enable or control.</td>
+</tr>
+<tr class="row-even"><td>ChunkEnable</td>
+<td>Enables the inclusion of the selected Chunk data in the payload of the image.</td>
+</tr>
+<tr class="row-odd"><td>ChunkCRC</td>
+<td>CRC chunk data.</td>
+</tr>
+<tr class="row-even"><td>ChunkTriggerLine</td>
+<td>Trigger line chunk data.</td>
+</tr>
+<tr class="row-odd"><td>ChunkHistogramStats</td>
+<td>Histogram stats chunk data.</td>
+</tr>
+<tr class="row-even"><td>ChunkDeepNeuralNetworkLength</td>
+<td>The length of the deep neural network chunk data.</td>
+</tr>
+<tr class="row-odd"><td>ChunkDeepNeuralNetwork</td>
+<td>Deep neural network chunk data.</td>
+</tr>
+<tr class="row-even"><td>ChunkTimestamp</td>
+<td>Chunk Timestamp chunk data.</td>
+</tr>
+<tr class="row-odd"><td>ChunkSequencerSetActive</td>
+<td>Chunk Sequencer Set Active chunk data.</td>
+</tr>
+<tr class="row-even"><td>ChunkLineStatusAll</td>
+<td>Chunk Line Status All chunk data.</td>
+</tr>
+<tr class="row-odd"><td>ChunkPixelFormat</td>
+<td>Chunk Pixel Format chunk data.</td>
+</tr>
+<tr class="row-even"><td>ChunkWidth</td>
+<td>Chunk Width chunk data.</td>
+</tr>
+<tr class="row-odd"><td>ChunkHeight</td>
+<td>Chunk Height chunk data.</td>
+</tr>
+<tr class="row-even"><td>ChunkOffsetX</td>
+<td>Chunk Offset X chunk data.</td>
+</tr>
+<tr class="row-odd"><td>ChunkOffsetY</td>
+<td>Chunk Offset Y chunk data.</td>
+</tr>
+<tr class="row-even"><td>ChunkPixelDynamicRangeMin</td>
+<td>Chunk Pixel Dynamic Range Min chunk data.</td>
+</tr>
+<tr class="row-odd"><td>ChunkPixelDynamicRangeMax</td>
+<td>Chunk Pixel Dynamic Range Max chunk data.</td>
+</tr>
+<tr class="row-even"><td>ChunkGain</td>
+<td>Chunk Gain chunk data.</td>
+</tr>
+<tr class="row-odd"><td>ChunkBlackLevel</td>
+<td>Chunk Black Level chunk data.</td>
+</tr>
+<tr class="row-even"><td>ChunkExposureTime</td>
+<td>Chunk Exposure Time chunk data.</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+
+           </div>
+           <div class="articleComments">
+            
+           </div>
+          </div>
+          <footer>
+  
+    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
+      
+        <a href="ColorTransformationControl.html" class="btn btn-neutral float-right" title="Color Transformation Control" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right"></span></a>
+      
+      
+        <a href="AwbAOI.html" class="btn btn-neutral" title="AWB AOI" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left"></span> Previous</a>
+      
+    </div>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2023, Lucid Vision Labs.
+
+    </p>
+  </div> 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  
+
+    <script type="text/javascript">
+        var DOCUMENTATION_OPTIONS = {
+            URL_ROOT:'./',
+            VERSION:'1.21.0.0',
+            COLLAPSE_INDEX:false,
+            FILE_SUFFIX:'.html',
+            HAS_SOURCE:  true,
+            SOURCELINK_SUFFIX: '.txt'
+        };
+    </script>
+      <script type="text/javascript" src="_static/jquery.js"></script>
+      <script type="text/javascript" src="_static/underscore.js"></script>
+      <script type="text/javascript" src="_static/doctools.js"></script>
+      <script type="text/javascript" src="_static/examplecode.js"></script>
+
+  
+
+  
+  
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+  
+
+  
+  
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.StickyNav.enable();
+      });
+  </script>
+   
+
+</body>
+</html>

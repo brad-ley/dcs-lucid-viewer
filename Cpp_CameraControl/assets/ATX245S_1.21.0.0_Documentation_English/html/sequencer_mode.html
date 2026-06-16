@@ -1,0 +1,325 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>Supported Features: &mdash; ATX245S 1.21.0.0 documentation</title>
+  
+
+  
+  
+  
+  
+
+  
+
+  
+  
+    
+
+  
+
+  
+  
+    <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  
+
+  
+  
+
+  
+        <link rel="index" title="Index"
+              href="genindex.html"/>
+        <link rel="search" title="Search" href="search.html"/>
+    <link rel="top" title="ATX245S 1.21.0.0 documentation" href="index.html"/> 
+
+  
+  <script src="_static/js/modernizr.min.js"></script>
+
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+   
+  <div class="wy-grid-for-nav">
+
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search">
+          
+
+          
+            <a href="ExternalDoc.html" class="icon icon-home"> ATX245S
+          
+
+          
+            
+            <img src="../lucid-white-logo.png" class="logo" />
+          
+          </a>
+
+          
+            
+            
+              <div class="version">
+                1.21.0.0
+              </div>
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <ul>
+<li class="toctree-l1"><a class="reference internal" href="welcome_page.html">Welcome!</a></li>
+<li class="toctree-l1"><a class="reference internal" href="safety_and_precautions_atlas10.html">Safety and Precautions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="contact_us.html">Contact Us</a></li>
+<li class="toctree-l1"><a class="reference internal" href="install_camera_hardware_atlas10.html">Installing the Camera Hardware</a></li>
+<li class="toctree-l1"><a class="reference internal" href="configure_host_camera.html">Configuring the Camera and Host System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="using_camera.html">Using the Camera</a></li>
+<li class="toctree-l1"><a class="reference internal" href="camera_specification_atlas10.html">Camera Specifications</a></li>
+<li class="toctree-l1"><a class="reference internal" href="camera_features_atlas10.html">Camera Features</a></li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="CategoryDoc.html">Device Nodes</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" role="navigation" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="ExternalDoc.html">ATX245S</a>
+        
+      </nav>
+
+
+      
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="ExternalDoc.html">Docs</a> &raquo;</li>
+        
+      <li>Supported Features:</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <div class="section" id="supported-features">
+<h1>Supported Features:<a class="headerlink" href="#supported-features" title="Permalink to this headline">¶</a></h1>
+<p>The following features are supported in a sequencer set:</p>
+<ol class="arabic simple">
+<li>Gain</li>
+<li>Exposure Time</li>
+</ol>
+</div>
+<div class="section" id="configuring-a-sequencer-set">
+<h1>Configuring a Sequencer Set<a class="headerlink" href="#configuring-a-sequencer-set" title="Permalink to this headline">¶</a></h1>
+<p>The following instructions explains how to configure a sequencer with two sets of Exposure Time where set 0 goes to set 1 and set 1 goes back to set 0, all being triggered on Frame Start.</p>
+<p><strong>Configuring first set of the sequencer:</strong></p>
+<ol class="arabic simple">
+<li>To start the configuration process, set SequencerConfigurationMode to &#8220;On&#8221; under the Sequencer Control group.</li>
+<li>Ensure that SequencerFeatureSelector is set to &#8220;ExposureTime&#8221;.</li>
+<li>By default, SequencerSetSelector is set to &#8220;0&#8221;. This means that we can set a exposure time for set &#8220;0&#8221; under AcquisitionControl (the ExposureAuto node is already forced Off at this point). Under the Acquisition Control group, set an ExposureTime of 100 us.</li>
+<li>Set SequencerSetStart to &#8220;0&#8221;. This means that every cycle starts from set &#8220;0&#8221;.</li>
+<li>SequencerPathSelector can be &#8220;0&#8221;.</li>
+<li>Set SequencerSetNext to &#8220;1&#8221;.</li>
+<li>Set SequencerTriggerSource to &#8220;FrameStart&#8221;. This allows the sequencer to change the set at each Frame Start signal.</li>
+<li>Click &#8220;SequencerSetSave&#8221; to save your first set of sequencer settings with an exposure time of 100 us.</li>
+</ol>
+<p><strong>Configuring the second set of the sequencer:</strong></p>
+<ol class="arabic simple">
+<li>Change SequencerSetSelector from &#8220;0&#8221; to &#8220;1&#8221; in order to start configuring set 2.</li>
+<li>Set SequencerSetNext to &#8220;0&#8221;.</li>
+<li>Go under the Acquisition Control group and set ExposureTime to another value like 50000 us.</li>
+<li>Leave SequencerTriggerSource to &#8220;FrameStart&#8221;. This allows the sequencer to change at each Frame Start signal.</li>
+<li>Click on &#8220;SequencerSetSave&#8221; to save your second set of sequencer settings with exposure time 50000 us.</li>
+</ol>
+<p>Turn SequencerConfigurationMode to &#8220;Off&#8221;; the firmware validates your sequencer setting to ensure it is valid.
+SequencerMode should now be writable, which allows you to set it to &#8220;On&#8221;. If it&#8217;s not writable, this means that the sequencer set configured is invalid.
+After setting SequencerMode to &#8220;On&#8221; and streaming the camera, you should see flashing of images with two exposure times.</p>
+<p><a class="reference internal" href="_images/lightbulb_icon.png"><img alt="light_bulb" src="_images/lightbulb_icon.png" style="width: 50px;" /></a> <cite>For the SingleFrame and MultiFrame acquisition modes, AcquisitionStop must be executed before executing AcquistionStart again.</cite></p>
+<p>The following pseudocode summarizes the above instructions and demonstrates how to configure two sets (0 and 1) with varying ExposureTime so they loop 0-1-0-1.</p>
+<div class="highlight-cpp"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre> 1
+ 2
+ 3
+ 4
+ 5
+ 6
+ 7
+ 8
+ 9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28</pre></div></td><td class="code"><div class="highlight"><pre><span></span><span class="c1">// Connect to camera</span>
+<span class="c1">// Get device node map </span>
+<span class="n">ExposureAuto</span> <span class="o">=</span> <span class="s">&quot;Off&quot;</span><span class="p">;</span>
+<span class="n">GainAuto</span> <span class="o">=</span> <span class="s">&quot;Off&quot;</span><span class="p">;</span>
+<span class="n">SequencerMode</span> <span class="o">=</span> <span class="s">&quot;Off&quot;</span><span class="p">;</span>
+<span class="n">SequencerConfigurationMode</span> <span class="o">=</span> <span class="s">&quot;On&quot;</span><span class="p">;</span>
+
+<span class="c1">// Configuring set 1</span>
+<span class="n">SequencerSetSelector</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="n">SequencerFeatureSelector</span> <span class="o">=</span> <span class="s">&quot;ExposureTime&quot;</span><span class="p">;</span>
+<span class="n">ExposureTime</span> <span class="o">=</span> <span class="mi">100</span><span class="p">;</span>
+<span class="n">SequencerPathSelector</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="n">SequencerSetNext</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="n">SequencerTriggerSource</span> <span class="o">=</span> <span class="n">FrameStart</span><span class="p">;</span>
+<span class="n">SequencerSetSave</span><span class="p">;</span>
+
+<span class="c1">// Configuring set 2</span>
+<span class="n">SequencerSetSelector</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="n">SequencerFeatureSelector</span> <span class="o">=</span> <span class="s">&quot;ExposureTime&quot;</span><span class="p">;</span>
+<span class="n">ExposureTime</span> <span class="o">=</span> <span class="mi">50000</span><span class="p">;</span>
+<span class="n">SequencerPathSelector</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="n">SequencerSetNext</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="n">SequencerTriggerSource</span> <span class="o">=</span> <span class="n">FrameStart</span><span class="p">;</span>
+<span class="n">SequencerSetSave</span><span class="p">;</span>
+
+<span class="n">SequencerSetStart</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">SequencerConfigurationMode</span> <span class="o">=</span> <span class="s">&quot;Off&quot;</span>
+<span class="n">SequencerMode</span> <span class="o">=</span> <span class="s">&quot;On&quot;</span>
+</pre></div>
+</td></tr></table></div>
+</div>
+
+
+           </div>
+           <div class="articleComments">
+            
+           </div>
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2023, Lucid Vision Labs.
+
+    </p>
+  </div> 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  
+
+    <script type="text/javascript">
+        var DOCUMENTATION_OPTIONS = {
+            URL_ROOT:'./',
+            VERSION:'1.21.0.0',
+            COLLAPSE_INDEX:false,
+            FILE_SUFFIX:'.html',
+            HAS_SOURCE:  true,
+            SOURCELINK_SUFFIX: '.txt'
+        };
+    </script>
+      <script type="text/javascript" src="_static/jquery.js"></script>
+      <script type="text/javascript" src="_static/underscore.js"></script>
+      <script type="text/javascript" src="_static/doctools.js"></script>
+      <script type="text/javascript" src="_static/examplecode.js"></script>
+
+  
+
+  
+  
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+  
+
+  
+  
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.StickyNav.enable();
+      });
+  </script>
+   
+
+</body>
+</html>

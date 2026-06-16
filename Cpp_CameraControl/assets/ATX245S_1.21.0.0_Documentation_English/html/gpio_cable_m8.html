@@ -1,0 +1,257 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>GPIO Cable &mdash; ATX245S 1.21.0.0 documentation</title>
+  
+
+  
+  
+  
+  
+
+  
+
+  
+  
+    
+
+  
+
+  
+  
+    <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  
+
+  
+  
+
+  
+        <link rel="index" title="Index"
+              href="genindex.html"/>
+        <link rel="search" title="Search" href="search.html"/>
+    <link rel="top" title="ATX245S 1.21.0.0 documentation" href="index.html"/> 
+
+  
+  <script src="_static/js/modernizr.min.js"></script>
+
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+   
+  <div class="wy-grid-for-nav">
+
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search">
+          
+
+          
+            <a href="ExternalDoc.html" class="icon icon-home"> ATX245S
+          
+
+          
+            
+            <img src="../lucid-white-logo.png" class="logo" />
+          
+          </a>
+
+          
+            
+            
+              <div class="version">
+                1.21.0.0
+              </div>
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <ul>
+<li class="toctree-l1"><a class="reference internal" href="welcome_page.html">Welcome!</a></li>
+<li class="toctree-l1"><a class="reference internal" href="safety_and_precautions_atlas10.html">Safety and Precautions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="contact_us.html">Contact Us</a></li>
+<li class="toctree-l1"><a class="reference internal" href="install_camera_hardware_atlas10.html">Installing the Camera Hardware</a></li>
+<li class="toctree-l1"><a class="reference internal" href="configure_host_camera.html">Configuring the Camera and Host System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="using_camera.html">Using the Camera</a></li>
+<li class="toctree-l1"><a class="reference internal" href="camera_specification_atlas10.html">Camera Specifications</a></li>
+<li class="toctree-l1"><a class="reference internal" href="camera_features_atlas10.html">Camera Features</a></li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="CategoryDoc.html">Device Nodes</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" role="navigation" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="ExternalDoc.html">ATX245S</a>
+        
+      </nav>
+
+
+      
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="ExternalDoc.html">Docs</a> &raquo;</li>
+        
+      <li>GPIO Cable</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <div class="section" id="gpio-cable">
+<h1>GPIO Cable<a class="headerlink" href="#gpio-cable" title="Permalink to this headline">¶</a></h1>
+<p>The ATX245S camera is equipped with an 8-pin General Purpose Input/Output
+(GPIO) connector at the back.</p>
+<ul class="simple">
+<li>Lucid Vision Labs cameras are designed to use shielded or unshielded Ethernet cables.</li>
+<li>When using a shielded GPIO cable in an industrial setting, care must be taken to prevent ground loops from forming between the camera chassis, Ethernet PoE power sourcing equipment, IT infrastructure, and devices connected to GPIO.</li>
+<li>The GPIO cable can be shielded if terminated properly. An improper GPIO shield termination scheme can cause substantial EMC emissions and immunity issues, induce noise, and cause damage to the camera or equipment attached to the GPIO cable. Using a shielded GPIO cable requires careful consideration of the system level EMC when shielded Ethernet cables and PoE power are used.</li>
+<li>Only use shielded GPIO cables when powering the camera through GPIO. Be aware of the power supply earth connection, and to the Ethernet shielding termination, which is best achieved by AC-coupling the Ethernet shield at the host chassis, or by using UTP cable.</li>
+<li>Any GPIO cable with M8 connector compliant with IEC 61076-2-104 will work. An example connector that mates with ATX245S is Phoenix Contact Part Number 1424237.</li>
+<li>The recommended wire thickness is AWG26 or AWG28.</li>
+<li>Lucid Vision Labs recommends using qualified GPIO cables from our web store.</li>
+</ul>
+<table border="1" class="docutils">
+<colgroup>
+<col width="10%" />
+<col width="90%" />
+</colgroup>
+<tbody valign="top">
+<tr class="row-odd"><td><a class="reference internal" href="_images/help_icon.png"><img alt="help" src="_images/help_icon.png" style="width: 70px;" /></a></td>
+<td>Consult the GPIO Characteristics section for a GPIO pinout diagram.</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+
+           </div>
+           <div class="articleComments">
+            
+           </div>
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2023, Lucid Vision Labs.
+
+    </p>
+  </div> 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  
+
+    <script type="text/javascript">
+        var DOCUMENTATION_OPTIONS = {
+            URL_ROOT:'./',
+            VERSION:'1.21.0.0',
+            COLLAPSE_INDEX:false,
+            FILE_SUFFIX:'.html',
+            HAS_SOURCE:  true,
+            SOURCELINK_SUFFIX: '.txt'
+        };
+    </script>
+      <script type="text/javascript" src="_static/jquery.js"></script>
+      <script type="text/javascript" src="_static/underscore.js"></script>
+      <script type="text/javascript" src="_static/doctools.js"></script>
+      <script type="text/javascript" src="_static/examplecode.js"></script>
+
+  
+
+  
+  
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+  
+
+  
+  
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.StickyNav.enable();
+      });
+  </script>
+   
+
+</body>
+</html>

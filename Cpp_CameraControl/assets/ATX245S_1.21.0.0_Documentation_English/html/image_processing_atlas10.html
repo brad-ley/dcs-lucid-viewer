@@ -1,0 +1,531 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>Image Processing Controls &mdash; ATX245S 1.21.0.0 documentation</title>
+  
+
+  
+  
+  
+  
+
+  
+
+  
+  
+    
+
+  
+
+  
+  
+    <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  
+
+  
+  
+
+  
+        <link rel="index" title="Index"
+              href="genindex.html"/>
+        <link rel="search" title="Search" href="search.html"/>
+    <link rel="top" title="ATX245S 1.21.0.0 documentation" href="index.html"/> 
+
+  
+  <script src="_static/js/modernizr.min.js"></script>
+
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+   
+  <div class="wy-grid-for-nav">
+
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search">
+          
+
+          
+            <a href="ExternalDoc.html" class="icon icon-home"> ATX245S
+          
+
+          
+            
+            <img src="../lucid-white-logo.png" class="logo" />
+          
+          </a>
+
+          
+            
+            
+              <div class="version">
+                1.21.0.0
+              </div>
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <ul>
+<li class="toctree-l1"><a class="reference internal" href="welcome_page.html">Welcome!</a></li>
+<li class="toctree-l1"><a class="reference internal" href="safety_and_precautions_atlas10.html">Safety and Precautions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="contact_us.html">Contact Us</a></li>
+<li class="toctree-l1"><a class="reference internal" href="install_camera_hardware_atlas10.html">Installing the Camera Hardware</a></li>
+<li class="toctree-l1"><a class="reference internal" href="configure_host_camera.html">Configuring the Camera and Host System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="using_camera.html">Using the Camera</a></li>
+<li class="toctree-l1"><a class="reference internal" href="camera_specification_atlas10.html">Camera Specifications</a></li>
+<li class="toctree-l1"><a class="reference internal" href="camera_features_atlas10.html">Camera Features</a></li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="CategoryDoc.html">Device Nodes</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" role="navigation" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="ExternalDoc.html">ATX245S</a>
+        
+      </nav>
+
+
+      
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="ExternalDoc.html">Docs</a> &raquo;</li>
+        
+      <li>Image Processing Controls</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <div class="section" id="image-processing-controls">
+<h1>Image Processing Controls<a class="headerlink" href="#image-processing-controls" title="Permalink to this headline">¶</a></h1>
+<p>The ATX245S camera is equipped with the following image processing control flow.</p>
+<a class="reference internal image-reference" href="_images/image_processing_control_flow.png"><img alt="_images/image_processing_control_flow.png" class="align-center" src="_images/image_processing_control_flow.png" style="width: 800px;" /></a>
+<p>The details of each of the image processing controls are described below.</p>
+<div class="section" id="defect-pixel-correction">
+<h2>Defect Pixel Correction<a class="headerlink" href="#defect-pixel-correction" title="Permalink to this headline">¶</a></h2>
+<p>The ATX245S supports a list of pixel coordinates to be corrected via
+firmware. For the list of pixel coordinates, their actual pixel values are
+replaced by interpolation of their neighboring pixel values. The camera has a
+preloaded pixel correction list and these pixels are loaded during the camera
+manufacturing process. Defective pixels are an inevitable part of the
+semiconductor manufacturing process. As the camera operates
+for extended periods at elevated temperatures or is exposed to radiation,
+more defective pixels may appear. You can update the pixel correction list at any time.</p>
+<p><strong>Steps to add a new pixel to the correction list</strong></p>
+<ol class="arabic simple">
+<li>Set OffsetX and OffsetY to zero. Set Width and Height to the maximum allowed value.</li>
+<li>Set Gain to zero and note the coordinates of any bright pixels in the image. Please ensure the camera is not exposed to light by covering it with a lens cap and placed in a dark box.</li>
+<li>Fire the DefectCorrectionGetNewDefect command.</li>
+<li>Enter the X-coordinate noted in step 2 into DefectCorrectionPositionX.</li>
+<li>Enter the Y-coordinate noted in step 2 into DefectCorrectionPositionY.</li>
+<li>Fire the DefectCorrectionApply command.</li>
+<li>Repeat steps 3-6 as needed and fire the DefectCorrectionSave when done.</li>
+</ol>
+<table border="1" class="docutils">
+<colgroup>
+<col width="9%" />
+<col width="91%" />
+</colgroup>
+<tbody valign="top">
+<tr class="row-odd"><td rowspan="2"><a class="reference internal" href="_images/lightbulb_icon.png"><img alt="light_bulb" src="_images/lightbulb_icon.png" style="width: 50px;" /></a></td>
+<td rowspan="2">Pixel correction is still applied if the image geometry changes (e.g. applying ReverseX, ReverseY, a region of interest, or binning).</td>
+</tr>
+<tr class="row-even"></tr>
+</tbody>
+</table>
+<p>The table below shows the maximum number of defective pixels that can be added
+to the correction list.</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="52%" />
+<col width="48%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Model</th>
+<th class="head">List Length</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>ATX051S</td>
+<td>512</td>
+</tr>
+<tr class="row-odd"><td>ATX081S</td>
+<td>512</td>
+</tr>
+<tr class="row-even"><td>ATX124S</td>
+<td>512</td>
+</tr>
+<tr class="row-odd"><td>ATX162S</td>
+<td>512</td>
+</tr>
+<tr class="row-even"><td>ATX204S</td>
+<td>512</td>
+</tr>
+<tr class="row-odd"><td>ATX245S</td>
+<td>128</td>
+</tr>
+</tbody>
+</table>
+<p>The following pseudocode demonstrates how to add a defective pixel to the
+correction list:</p>
+<div class="highlight-cpp"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre> 1
+ 2
+ 3
+ 4
+ 5
+ 6
+ 7
+ 8
+ 9
+10
+11
+12
+13
+14
+15
+16</pre></div></td><td class="code"><div class="highlight"><pre><span></span><span class="c1">// Connect to camera</span>
+<span class="c1">// Get device node map   </span>
+<span class="c1">// Set maximum width and height </span>
+<span class="n">OffsetX</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="n">OffsetY</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="n">Width</span> <span class="o">=</span> <span class="n">Max</span> <span class="n">Width</span><span class="p">;</span>
+<span class="n">Height</span> <span class="o">=</span> <span class="n">Max</span> <span class="n">Height</span><span class="p">;</span>
+<span class="c1">// Set constant ExposureTime and Gain </span>
+
+<span class="n">DefectCorrectionGetNewDefect</span><span class="p">();</span>
+<span class="n">DefectCorrectionPositionX</span> <span class="o">=</span> <span class="mi">25</span><span class="p">;</span>  <span class="c1">// The X-coordinate of the blemish pixel </span>
+<span class="n">DefectCorrectionPositionY</span> <span class="o">=</span> <span class="mi">150</span><span class="p">;</span> <span class="c1">// The Y-coordinate of the blemish pixel </span>
+<span class="n">DefectCorrectionApply</span><span class="p">();</span>
+
+<span class="c1">// Repeat the above four steps as needed. When complete:</span>
+<span class="n">DefectCorrectionSave</span><span class="p">();</span>
+</pre></div>
+</td></tr></table></div>
+</div>
+<div class="section" id="gain">
+<h2>Gain<a class="headerlink" href="#gain" title="Permalink to this headline">¶</a></h2>
+<p>Gain refers to a multiplication factor applied to a signal to increase the
+strength of that signal. On Lucid cameras, gain can be either
+manually adjusted or automatically controlled.</p>
+<p>Some cameras feature gain that is purely digital while others allow for analog
+gain control up to a certain value, beyond which the gain becomes digital.
+Depending on the camera family and sensor model, the specific gain control
+can vary.</p>
+<div class="section" id="analog-gain">
+<h3>Analog Gain<a class="headerlink" href="#analog-gain" title="Permalink to this headline">¶</a></h3>
+<p>Analog Gain refers to amplification of the sensor signal prior to A/D conversion.</p>
+</div>
+<div class="section" id="digital-gain">
+<h3>Digital Gain<a class="headerlink" href="#digital-gain" title="Permalink to this headline">¶</a></h3>
+<p>Digital Gain refers to amplification of the signal after digitization.</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="29%" />
+<col width="35%" />
+<col width="35%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Model</th>
+<th class="head">Analog</th>
+<th class="head">Digital</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>ATX245S</td>
+<td>0-24 dB</td>
+<td>24.1-48 dB</td>
+</tr>
+<tr class="row-odd"><td>ATX204S</td>
+<td>0-24 dB</td>
+<td>24.1-48 dB</td>
+</tr>
+<tr class="row-even"><td>ATX162S</td>
+<td>0-24 dB</td>
+<td>24.1-48 dB</td>
+</tr>
+</tbody>
+</table>
+<p>The following pseudocode demonstrates how to set Gain to 12dB:</p>
+<div class="highlight-cpp"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre>1
+2
+3
+4</pre></div></td><td class="code"><div class="highlight"><pre><span></span><span class="c1">// Connect to camera</span>
+<span class="c1">// Get device node map </span>
+<span class="n">GainAuto</span> <span class="o">=</span> <span class="n">Off</span><span class="p">;</span>
+<span class="n">Gain</span> <span class="o">=</span> <span class="mi">12</span><span class="p">;</span>
+</pre></div>
+</td></tr></table></div>
+</div>
+</div>
+<div class="section" id="color-processing">
+<h2>Color Processing<a class="headerlink" href="#color-processing" title="Permalink to this headline">¶</a></h2>
+<p>The ATX245S camera is equipped with a debayering core in the image
+processing pipeline. The color processing core enables the camera to output a
+color processed image format in addition to the unprocessed Bayer-tiled image.
+The camera supports the RGB8 pixel format, which outputs 8 bits of
+data per color channel for a total of 24 bits per pixel. Due to the number of
+bits per pixel, the total image size for RGB8 is three times larger
+than an 8-bit image. This increase in image data size per frame
+reduces the average frame rate of the camera.</p>
+<p>The following pseudocode demonstrates how to configure the camera to RGB8 pixel
+format:</p>
+<div class="highlight-cpp"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre>1
+2
+3</pre></div></td><td class="code"><div class="highlight"><pre><span></span><span class="c1">// Connect to camera</span>
+<span class="c1">// Get device node map </span>
+<span class="n">PixelFormat</span> <span class="o">=</span> <span class="n">PixelFormat_RGB8</span><span class="p">;</span>
+</pre></div>
+</td></tr></table></div>
+</div>
+<div class="section" id="white-balance">
+<h2>White Balance<a class="headerlink" href="#white-balance" title="Permalink to this headline">¶</a></h2>
+<p>The White Balance module aims to change the balance between the Red, Green and
+Blue channels such that a white object appears white in the acquired images.
+Lucid cameras allow for manual white balance adjustment by the
+user, or automatic white balance adjustment based on statistics of previously
+acquired frames. Different external illuminations and different sensors may
+render acquired images with color shift. The White Balance module allows the
+user to correct for the color shift by adjusting gain value of each color channel.</p>
+<p>Lucid offers two types of white balance algorithms as described below.
+Each algorithm below allow for user controlled anchor points or reference points,
+from which multipliers are computed for each channel. The different anchor
+points are summarized below.</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="6%" />
+<col width="94%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Anchors</th>
+<th class="head">Information</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>Min</td>
+<td>The lowest luminance channel is used as reference while other channels are adjusted to match it. There is no chance of overflowing the pixels, but the image is darkened.</td>
+</tr>
+<tr class="row-odd"><td>Max</td>
+<td>The highest luminance channel is used as reference while other channels are adjusted to match it. There is a chance of overflowing the pixels.</td>
+</tr>
+<tr class="row-even"><td>Mean</td>
+<td>The mean value of all channels is used as reference while all channels are adjusted to match the mean. There is a smaller chance of overflowing.</td>
+</tr>
+<tr class="row-odd"><td>Green</td>
+<td>Green channel is used as the reference while the Red and Blue are adjusted.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Grey World</strong></p>
+<p>The Grey World algorithm assumes that the average of all colors in an image is a neutral grey.</p>
+<p><strong>White Patch</strong></p>
+<p>The White Patch algorithm has the same idea as Grey World, but only considers a section of the image (i.e. the section being the white
+patches). A simple way to determine such section(s) of the image is to indicate a pixel as white when R+G+B is greater than the
+threshold pixel value. Determining the threshold can be done using a 90% percentile of previous image. There is also a need for
+an additional threshold to exclude saturated pixels for better white balance adjustment.</p>
+</div>
+<div class="section" id="look-up-table-lut">
+<h2>Look-Up Table (LUT)<a class="headerlink" href="#look-up-table-lut" title="Permalink to this headline">¶</a></h2>
+<p>A Look-Up Table (LUT) maps 12-bit raw sensor pixel values to 12-bit user-specified pixel values. Users input values for the even indices including the last index 4095 while averaging is used to calculate the rest of the odd indices. This results in a total of 2049 effective input entries; 2048 even (e.g., 0, 2, 4, ..., 4092, 4094) + 1 odd (4095). Index value 0 corresponds to black while the index value 4095 corresponds to white.</p>
+<p>To build a LUT, users input index values (e.g., 0, 2, 4, ..., 4092, 4094, 4095) that need to be replaced in the LUTIndex field and the corresponding new value in the LUTValue field. For the odd index values in the gap (e.g., 1,3,5 …,4089, 4091, 4093), their mapped value is calculated by taking the average of their neighbor mapped values (e.g., If the input mappings are LUTIndex = 1090 -&gt; LUTValue = 10 and LUTIndex = 1092 -&gt; LUTValue = 20, then the mapped value of LUTIndex  = 1091 will be LUTValue = 15)</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="7%" />
+<col width="93%" />
+</colgroup>
+<tbody valign="top">
+<tr class="row-odd"><td><a class="reference internal" href="_images/lightbulb_icon.png"><img alt="light_bulb" src="_images/lightbulb_icon.png" style="width: 50px;" /></a></td>
+<td>To reset Look-Up Table, please execute <strong>LUTReset</strong> command</td>
+</tr>
+</tbody>
+</table>
+<p>The following pseudocode demonstrates how to replace black pixel values with white pixel values:</p>
+<div class="highlight-cpp"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre>1
+2
+3
+4
+5
+6
+7</pre></div></td><td class="code"><div class="highlight"><pre><span></span><span class="c1">// Connect to camera</span>
+<span class="c1">// Get device node map </span>
+
+<span class="n">LUTEnable</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>   
+<span class="n">LUTIndex</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="c1">//Pixel value to be replaced, in this case black  </span>
+<span class="n">LUTValue</span> <span class="o">=</span> <span class="mi">4095</span><span class="p">;</span> <span class="c1">//New pixel value, in this case white     </span>
+<span class="n">LUTSave</span><span class="p">();</span>
+</pre></div>
+</td></tr></table></div>
+</div>
+<div class="section" id="gamma">
+<h2>Gamma<a class="headerlink" href="#gamma" title="Permalink to this headline">¶</a></h2>
+<p>The gamma control allows the optimization of brightness for display.
+Lucid implements Gamma using the GenICam standard as shown below.</p>
+<img alt="_images/gamma.png" src="_images/gamma.png" />
+<ul class="simple">
+<li>X = New pixel value; 0 &lt;= X &lt;=1</li>
+<li>Y = Old pixel value; 0 &lt;= Y &lt;=1</li>
+<li>Gamma = Pixel intensity; 0.2 &lt;= Gamma &lt;= 2</li>
+</ul>
+<p>Y in the Gamma formula is scaled down to [0-1] from the original pixel range, which results in
+a pixel range of [0-1] for X. Thus, for 12-bit pixel formats, this means scaling
+down the pixel range from [0-4095] to [0-1] and for 16-bit pixel formats, this means
+scaling down the pixel range from [0-65535] to [0-1].</p>
+<p>The camera applies gamma correction values to the intensity of each pixel. In general,
+gamma values can be summarized as follows:</p>
+<ul class="simple">
+<li>Gamma = 1: brightness is unchanged.</li>
+<li>1 &lt;= Gamma &lt;= 2: brightness decreases.</li>
+<li>0.2 &lt;= Gamma &lt;= 1: brightness increases.</li>
+</ul>
+</div>
+<div class="section" id="color-space-conversion-and-correction">
+<h2>Color Space Conversion and Correction<a class="headerlink" href="#color-space-conversion-and-correction" title="Permalink to this headline">¶</a></h2>
+<p>The Color Space Conversion control allows you to convert from RGB color
+space to another color space such as YUV.
+The conversion is done in a linear manner as shown in the following equation.</p>
+<img alt="_images/color_space_conversion.png" src="_images/color_space_conversion.png" />
+<p>The color correction function lets you select from several
+preset values or configure your own matrix values. The color correction enables the multiplication of a 3x3 matrix to the 3x1 matrix containing
+R, G and B pixel values to achieve more desirable R&#8217;, G&#8217; and B&#8217; values.
+The specific mathematical procedure can be represented by the following.</p>
+<img alt="_images/ccm.png" src="_images/ccm.png" />
+<ul class="simple">
+<li>The ColorTransformationEnable node indicates whether the conversion matrix of the color space conversion module is used or bypassed.</li>
+<li>When the pixel format is YUV or YCbCr, ColorTransformationSelector is displayed as RGBtoYUV. When the pixel format is Mono, ColorTransformationSelector is displayed as RGBtoY.</li>
+<li>ColorTransformationValueSelector configures which coefficient in the conversion matrix and the coefficient value is shown in ColorTransformationValue. In Mono, YUV or YCbCr pixel formats, ColorTransformationValue is read only.</li>
+</ul>
+</div>
+</div>
+
+
+           </div>
+           <div class="articleComments">
+            
+           </div>
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2023, Lucid Vision Labs.
+
+    </p>
+  </div> 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  
+
+    <script type="text/javascript">
+        var DOCUMENTATION_OPTIONS = {
+            URL_ROOT:'./',
+            VERSION:'1.21.0.0',
+            COLLAPSE_INDEX:false,
+            FILE_SUFFIX:'.html',
+            HAS_SOURCE:  true,
+            SOURCELINK_SUFFIX: '.txt'
+        };
+    </script>
+      <script type="text/javascript" src="_static/jquery.js"></script>
+      <script type="text/javascript" src="_static/underscore.js"></script>
+      <script type="text/javascript" src="_static/doctools.js"></script>
+      <script type="text/javascript" src="_static/examplecode.js"></script>
+
+  
+
+  
+  
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+  
+
+  
+  
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.StickyNav.enable();
+      });
+  </script>
+   
+
+</body>
+</html>

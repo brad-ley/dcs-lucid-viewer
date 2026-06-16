@@ -1,0 +1,35 @@
+<!-- =============================================================================
+     resources.qrc
+     =============================================================================
+
+     Qt Resource Collection file.
+
+     C++ CONCEPT — Qt Resources:
+       Qt lets you embed files (images, icons, fonts, etc.) directly into
+       the compiled .exe so they are always available at runtime — no need
+       to ship loose files alongside the executable.
+
+       You declare each file here, then reference it in C++ with the special
+       ":/prefix/filename" path syntax. Qt's resource system intercepts that
+       path and returns the bytes that were compiled in.
+
+     How it works at build time:
+       CMake's AUTORCC setting (enabled by qt_standard_project_setup()) sees
+       this .qrc file in the sources list and automatically runs Qt's "rcc"
+       tool on it, which converts the listed files into a compiled C++ .cpp
+       file that is linked into your .exe.
+
+     Usage in C++:
+       QIcon icon(":/assets/video-camera.png");
+       The ":/assets/video-camera.png" path maps to:
+         prefix="/" + file listed as "assets/video-camera.png" below.
+     ============================================================================= -->
+
+<RCC>
+    <qresource prefix="/">
+        <!-- The app icon shown in the window title bar and taskbar -->
+        <file>assets/video-camera.png</file>
+        <!-- Multi-resolution ICO for the title bar (works better on Windows than PNG) -->
+        <file>assets/app.ico</file>
+    </qresource>
+</RCC>

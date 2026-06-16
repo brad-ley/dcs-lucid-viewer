@@ -1,0 +1,478 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>Device Control &mdash; ATX245S 1.21.0.0 documentation</title>
+  
+
+  
+  
+  
+  
+
+  
+
+  
+  
+    
+
+  
+
+  
+  
+    <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  
+
+  
+  
+
+  
+        <link rel="index" title="Index"
+              href="genindex.html"/>
+        <link rel="search" title="Search" href="search.html"/>
+    <link rel="top" title="ATX245S 1.21.0.0 documentation" href="index.html"/>
+        <link rel="up" title="Device Nodes" href="CategoryDoc.html"/>
+        <link rel="next" title="Digital IO Control" href="DigitalIOControl.html"/>
+        <link rel="prev" title="Defect Correction Control" href="DefectCorrectionControl.html"/> 
+
+  
+  <script src="_static/js/modernizr.min.js"></script>
+
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+   
+  <div class="wy-grid-for-nav">
+
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search">
+          
+
+          
+            <a href="ExternalDoc.html" class="icon icon-home"> ATX245S
+          
+
+          
+            
+            <img src="../lucid-white-logo.png" class="logo" />
+          
+          </a>
+
+          
+            
+            
+              <div class="version">
+                1.21.0.0
+              </div>
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <ul>
+<li class="toctree-l1"><a class="reference internal" href="welcome_page.html">Welcome!</a></li>
+<li class="toctree-l1"><a class="reference internal" href="safety_and_precautions_atlas10.html">Safety and Precautions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="contact_us.html">Contact Us</a></li>
+<li class="toctree-l1"><a class="reference internal" href="install_camera_hardware_atlas10.html">Installing the Camera Hardware</a></li>
+<li class="toctree-l1"><a class="reference internal" href="configure_host_camera.html">Configuring the Camera and Host System</a></li>
+<li class="toctree-l1"><a class="reference internal" href="using_camera.html">Using the Camera</a></li>
+<li class="toctree-l1"><a class="reference internal" href="camera_specification_atlas10.html">Camera Specifications</a></li>
+<li class="toctree-l1"><a class="reference internal" href="camera_features_atlas10.html">Camera Features</a></li>
+</ul>
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal" href="CategoryDoc.html">Device Nodes</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="AcquisitionControl.html">Acquisition Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ActionControl.html">Action Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="AnalogControl.html">Analog Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ChunkDataControl.html">Chunk Data Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ColorTransformationControl.html">Color Transformation Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="CounterAndTimerControl.html">Counter And Timer Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="DefectCorrectionControl.html">Defect Correction Control</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Device Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="DigitalIOControl.html">Digital IO Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="EventControl.html">Event Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="FileAccessControl.html">File Access Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="I2CAccessControl.html">I2C Access Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ImageFormatControl.html">Image Format Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="LUTControl.html">LUT Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="SequencerControl.html">Sequencer Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="SerialAccessControl.html">Serial Access Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ShadingCorrectionControl.html">Shading Correction Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="SoftwareSignalControl.html">Software Signal Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TestControl.html">Test Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TransferControl.html">Transfer Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TransportLayerControl.html">Transport Layer Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="UserSetControl.html">User Set Control</a></li>
+</ul>
+</li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" role="navigation" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="ExternalDoc.html">ATX245S</a>
+        
+      </nav>
+
+
+      
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="ExternalDoc.html">Docs</a> &raquo;</li>
+        
+          <li><a href="CategoryDoc.html">Device Nodes</a> &raquo;</li>
+        
+      <li>Device Control</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <div class="section" id="device-control">
+<h1>Device Control<a class="headerlink" href="#device-control" title="Permalink to this headline">¶</a></h1>
+<p>Device Control contains features that provide information of the capabilities
+of the device. There are also features that describe the particular device in
+detail. These features can be used in applications to query the capabilities
+of the device and report them to the end user if needed.</p>
+<p>Below is a list of the available features that are contained in the specific
+category.</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="50%" />
+<col width="50%" />
+</colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Node Name</th>
+<th class="head">Description</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>DeviceType</td>
+<td>Returns the device type.</td>
+</tr>
+<tr class="row-odd"><td>DeviceScanType</td>
+<td>Scan type of the sensor of the device.</td>
+</tr>
+<tr class="row-even"><td>DeviceVendorName</td>
+<td>Name of the manufacturer of the device.</td>
+</tr>
+<tr class="row-odd"><td>DeviceModelName</td>
+<td>Model of the device.</td>
+</tr>
+<tr class="row-even"><td>DeviceFamilyName</td>
+<td>Identifier of the product family of the device.</td>
+</tr>
+<tr class="row-odd"><td>DeviceManufacturerInfo</td>
+<td>Provides additional information from the vendor about the device.</td>
+</tr>
+<tr class="row-even"><td>DeviceVersion</td>
+<td>Version of the device.</td>
+</tr>
+<tr class="row-odd"><td>DeviceFirmwareVersion</td>
+<td>Version of the firmware in the device.</td>
+</tr>
+<tr class="row-even"><td>DeviceSerialNumber</td>
+<td>Device&#8217;s unique serial number.</td>
+</tr>
+<tr class="row-odd"><td>DeviceUserID</td>
+<td>A device ID string that is user-programmable.</td>
+</tr>
+<tr class="row-even"><td>DeviceSFNCVersionMajor</td>
+<td>Major version of the Standard Features Naming Convention (SFNC) that was used to create the device&#8217;s GenICam XML.</td>
+</tr>
+<tr class="row-odd"><td>DeviceSFNCVersionMinor</td>
+<td>Minor version of the Standard Features Naming Convention (SFNC) that was used to create the device&#8217;s GenICam XML.</td>
+</tr>
+<tr class="row-even"><td>DeviceSFNCVersionSubMinor</td>
+<td>Sub minor version of the Standard Features Naming Convention (SFNC) that was used to create the device&#8217;s GenICam XML.</td>
+</tr>
+<tr class="row-odd"><td>DeviceManifestEntrySelector</td>
+<td>Manifest entry selector.</td>
+</tr>
+<tr class="row-even"><td>DeviceManifestXMLMajorVersion</td>
+<td>Indicates the major version number of the GenICam XML file of the selected manifest entry.</td>
+</tr>
+<tr class="row-odd"><td>DeviceManifestXMLMinorVersion</td>
+<td>Indicates the minor version number of the GenICam XML file of the selected manifest entry.</td>
+</tr>
+<tr class="row-even"><td>DeviceManifestXMLSubMinorVersion</td>
+<td>Indicates the sub minor version number of the GenICam XML file of the selected manifest entry.</td>
+</tr>
+<tr class="row-odd"><td>DeviceManifestSchemaMajorVersion</td>
+<td>Indicates the major version number of the schema file of the selected manifest entry.</td>
+</tr>
+<tr class="row-even"><td>DeviceManifestSchemaMinorVersion</td>
+<td>Indicates the minor version number of the schema file of the selected manifest entry.</td>
+</tr>
+<tr class="row-odd"><td>DeviceManifestPrimaryURL</td>
+<td>Indicates the first URL to the GenICam XML device description file of the selected manifest entry.</td>
+</tr>
+<tr class="row-even"><td>DeviceManifestSecondaryURL</td>
+<td>Indicates the second URL to the GenICam XML device description file of the selected manifest entry.</td>
+</tr>
+<tr class="row-odd"><td>DeviceTLType</td>
+<td>Transport Layer type of the device.</td>
+</tr>
+<tr class="row-even"><td>DeviceTLVersionMajor</td>
+<td>Major version of the Transport Layer of the device.</td>
+</tr>
+<tr class="row-odd"><td>DeviceTLVersionMinor</td>
+<td>Minor version of the Transport Layer of the device.</td>
+</tr>
+<tr class="row-even"><td>DeviceTLVersionSubMinor</td>
+<td>Sub minor version of the Transport Layer of the device.</td>
+</tr>
+<tr class="row-odd"><td>DeviceMaxThroughput</td>
+<td>Maximum bandwidth of the data that can be streamed out of the device.</td>
+</tr>
+<tr class="row-even"><td>DeviceLinkSelector</td>
+<td>Selects which Link of the device to control. In general, the device only has one link.</td>
+</tr>
+<tr class="row-odd"><td>DeviceLinkSpeed</td>
+<td>Indicates the speed of transmission negotiated on the specified Link selected by DeviceLinkSelector.</td>
+</tr>
+<tr class="row-even"><td>DeviceLinkThroughputLimitMode</td>
+<td>Controls if the DeviceLinkThroughputLimit is active.</td>
+</tr>
+<tr class="row-odd"><td>DeviceLinkThroughputLimit</td>
+<td>Limits the maximum bandwidth of the data that will be streamed out by the device on the selected Link.</td>
+</tr>
+<tr class="row-even"><td>DeviceLinkThroughputReserve</td>
+<td>Allocates the maximum percentage of bandwidth reserved for re-transmissions.</td>
+</tr>
+<tr class="row-odd"><td>DeviceLinkHeartbeatMode</td>
+<td>Activate or deactivate the selected Link&#8217;s heartbeat.</td>
+</tr>
+<tr class="row-even"><td>DeviceLinkHeartbeatTimeout</td>
+<td>Controls the current heartbeat timeout of the specific Link in microseconds.</td>
+</tr>
+<tr class="row-odd"><td>DeviceLinkCommandTimeout</td>
+<td>Indicates the command timeout of the specified Link in microseconds.</td>
+</tr>
+<tr class="row-even"><td>DeviceStreamChannelCount</td>
+<td>Indicates the number of stream channels supported by the device.</td>
+</tr>
+<tr class="row-odd"><td>DeviceStreamChannelSelector</td>
+<td>Selects the stream channel to control.</td>
+</tr>
+<tr class="row-even"><td>DeviceStreamChannelType</td>
+<td>Reports the type of the stream channel.</td>
+</tr>
+<tr class="row-odd"><td>DeviceStreamChannelEndianness</td>
+<td>Endianness of multi-byte pixel data for this stream.</td>
+</tr>
+<tr class="row-even"><td>DeviceStreamChannelPacketSize</td>
+<td>Specifies the stream packet size, in bytes, to send on the selected channel for the device.</td>
+</tr>
+<tr class="row-odd"><td>DeviceEventChannelCount</td>
+<td>Indicates the number of event channels supported by the device.</td>
+</tr>
+<tr class="row-even"><td>DeviceCharacterSet</td>
+<td>Character set used by all the strings of the device.</td>
+</tr>
+<tr class="row-odd"><td>DeviceReset</td>
+<td>Resets the device to its power up state.</td>
+</tr>
+<tr class="row-even"><td>DeviceFactoryReset</td>
+<td>Resets device to factory defaults.</td>
+</tr>
+<tr class="row-odd"><td>FirmwareUpdate</td>
+<td>Starts a firmware update.</td>
+</tr>
+<tr class="row-even"><td>DeviceFeaturePersistenceStart</td>
+<td>Indicate to the device and GenICam XML to get ready for persisting of all streamable features.</td>
+</tr>
+<tr class="row-odd"><td>DeviceFeaturePersistenceEnd</td>
+<td>Indicate to the device the end of feature persistence.</td>
+</tr>
+<tr class="row-even"><td>DeviceRegistersStreamingStart</td>
+<td>Prepare the device for registers streaming without checking for consistency.</td>
+</tr>
+<tr class="row-odd"><td>DeviceRegistersStreamingEnd</td>
+<td>Announce the end of registers streaming.</td>
+</tr>
+<tr class="row-even"><td>DeviceIndicatorMode</td>
+<td>Controls the behavior of the indicator LED showing the status of the Device.</td>
+</tr>
+<tr class="row-odd"><td>DeviceTemperatureSelector</td>
+<td>Selects the temperature sensor to read from.</td>
+</tr>
+<tr class="row-even"><td>DeviceTemperature</td>
+<td>Device temperature in degrees Celsius.</td>
+</tr>
+<tr class="row-odd"><td>DevicePressure</td>
+<td>The internal device pressure in kilopascals.</td>
+</tr>
+<tr class="row-even"><td>DevicePower</td>
+<td>Device power in Watts.</td>
+</tr>
+<tr class="row-odd"><td>DeviceClockSelector</td>
+<td>Selects the clock frequency to access from the device.</td>
+</tr>
+<tr class="row-even"><td>DeviceClockFrequency</td>
+<td>Returns the frequency of the selected Clock.</td>
+</tr>
+<tr class="row-odd"><td>Timestamp</td>
+<td>Reports the current value of the device timestamp counter.</td>
+</tr>
+<tr class="row-even"><td>TimestampReset</td>
+<td>Resets the current value of the device timestamp counter. Executing this command causes the timestamp counter to restart automatically.</td>
+</tr>
+<tr class="row-odd"><td>TimestampLatch</td>
+<td>Latches the current timestamp counter into TimestampLatchValue.</td>
+</tr>
+<tr class="row-even"><td>TimestampLatchValue</td>
+<td>Returns the latched value of the timestamp counter.</td>
+</tr>
+<tr class="row-odd"><td>DeviceUpTime</td>
+<td>Time the device has been powered in seconds.</td>
+</tr>
+<tr class="row-even"><td>LinkUpTime</td>
+<td>Time the device link has been established in seconds.</td>
+</tr>
+<tr class="row-odd"><td>ChipID</td>
+<td>Chip ID of the device.</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+
+           </div>
+           <div class="articleComments">
+            
+           </div>
+          </div>
+          <footer>
+  
+    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
+      
+        <a href="DigitalIOControl.html" class="btn btn-neutral float-right" title="Digital IO Control" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right"></span></a>
+      
+      
+        <a href="DefectCorrectionControl.html" class="btn btn-neutral" title="Defect Correction Control" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left"></span> Previous</a>
+      
+    </div>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2023, Lucid Vision Labs.
+
+    </p>
+  </div> 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  
+
+    <script type="text/javascript">
+        var DOCUMENTATION_OPTIONS = {
+            URL_ROOT:'./',
+            VERSION:'1.21.0.0',
+            COLLAPSE_INDEX:false,
+            FILE_SUFFIX:'.html',
+            HAS_SOURCE:  true,
+            SOURCELINK_SUFFIX: '.txt'
+        };
+    </script>
+      <script type="text/javascript" src="_static/jquery.js"></script>
+      <script type="text/javascript" src="_static/underscore.js"></script>
+      <script type="text/javascript" src="_static/doctools.js"></script>
+      <script type="text/javascript" src="_static/examplecode.js"></script>
+
+  
+
+  
+  
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+  
+
+  
+  
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.StickyNav.enable();
+      });
+  </script>
+   
+
+</body>
+</html>
