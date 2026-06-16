@@ -317,6 +317,7 @@
             <a href="#data-parsing">Data Parsing Reference</a>
             <a href="#pinned-ref">Pinned Params Reference</a>
             <a href="#scope">Scope / Timing</a>
+            <a href="#optical">Optical Adjustments</a>
         </nav>
 
         <div class="container">
@@ -1261,6 +1262,102 @@ corrected = np.stack([correct(f) for f in stack])</code>
                     GPIO lines at acquisition time — so you know which frame(s) overlap with the event.
                     The oscilloscope provides the fine-grained sub-frame timing that the camera's frame rate
                     alone cannot resolve.
+                </div>
+            </section>
+
+            <!-- ================================================================
+                 OPTICAL ADJUSTMENTS
+                 ================================================================ -->
+            <section id="optical" class="section">
+                <h2>Optical Adjustments</h2>
+
+                <p>
+                    The imaging chain consists of the scintillator, a folding mirror, and the camera lens.
+                    Alignment adjustments fall into four categories below. Most sessions require no changes —
+                    read each warning before touching anything.
+                </p>
+
+                <!-- ── Camera position ── -->
+                <h3>Moving the Camera Relative to the Beam</h3>
+                <p>
+                    Camera position is controlled via the EPICS B-station Experimental Table motors.
+                </p>
+                <ul>
+                    <li><strong>Z axis</strong> (<code>35idb:m1</code>) — positive direction is
+                        <strong>inboard</strong>.</li>
+                    <li><strong>Y axis</strong> (<code>35idb:m3</code>, <code>m6</code>, <code>m4</code>) — positive
+                        direction is <strong>up</strong>.</li>
+                </ul>
+                <div class="note">
+                    <strong>Note:</strong> When moving in Y, keep all three Y motors (<code>m3</code>, <code>m6</code>,
+                    <code>m4</code>)
+                    moving by the same amount in the same direction. Moving them unevenly can bind the table and make it
+                    difficult to recover.
+                </div>
+
+                <!-- ── Scintillator position ── -->
+                <h3>Moving the Scintillator</h3>
+                <p>
+                    The scintillator translation stage is controlled from the detector laptop:
+                    <br><br>
+                    <strong>Remote Desktop:</strong> <code>xxx.xxx.xxx.74</code> &nbsp;|&nbsp;
+                    <strong>Username:</strong> <code>dcs\detector-b</code> &nbsp;|&nbsp;
+                    <strong>Password:</strong> (standard lab password)
+                </p>
+                <p>
+                    The Conex-CC controllers appear on <strong>COM3</strong> (X) and <strong>COM4</strong> (Y):
+                </p>
+                <ul>
+                    <li><strong>X</strong> — moves the scintillator holder <strong>laterally</strong>.</li>
+                    <li><strong>Y</strong> — moves the scintillator toward or away from the lens
+                        (<strong>focus</strong>).
+                        Move Y slowly — it should already be close to correct, and the stage can crash at high
+                        values (approximately 25 mm).</li>
+                </ul>
+                <div class="warning">
+                    <strong>Use relative (step) moves only — do not use absolute positioning.</strong>
+                    Absolute moves fail frequently with these controllers. Always issue small relative steps.
+                </div>
+                <div class="note">
+                    <strong>If the controllers become disconnected:</strong> they must be re-initialized before use.
+                    Click <strong>Initialize</strong> repeatedly until the stage finds home. After re-initializing,
+                    set the speed from the default (2.5) down to <strong>0.5</strong> for more reliable operation.
+                </div>
+
+                <!-- ── Scintillator angle ── -->
+                <h3>Adjusting Scintillator Angle</h3>
+                <p>
+                    Scintillator tilt is adjusted from the same detector laptop
+                    (<code>xxx.xxx.xxx.74</code>, <code>dcs\detector-b</code>, standard password)
+                    using the <strong>Thorlabs Kinesis</strong> software:
+                </p>
+                <ul>
+                    <li><strong>M1</strong> (horizontal knob) — rotates <strong>about the Y-axis</strong> of the
+                        scintillator mount.</li>
+                    <li><strong>M2</strong> (vertical knob) — rotates <strong>about the X-axis</strong> of the
+                        scintillator mount.</li>
+                </ul>
+                <p>
+                    The goal is to make the scintillator face planar with the image plane so the entire field
+                    can be brought into focus simultaneously.
+                </p>
+
+                <!-- ── Folding mirror ── -->
+                <h3>Adjusting the Folding Mirror Angle</h3>
+                <p>
+                    The folding mirror is controlled via <strong>New Focus Picomotor</strong> software,
+                    accessible from either this PC or the detector laptop (the controller is on Ethernet,
+                    so either works):
+                </p>
+                <ul>
+                    <li><strong>M1</strong> — horizontal tilt.</li>
+                    <li><strong>M2</strong> — axis tilt (alignment).</li>
+                    <li><strong>M3</strong> — vertical tilt.</li>
+                </ul>
+                <div class="warning">
+                    <strong>Do not adjust the folding mirror unless absolutely necessary.</strong>
+                    The Picomotors are very slow to align and extremely sensitive — small changes are slow to recover
+                    from and will affect the focal plane of the optics. Think twice before changing any of these values.
                 </div>
             </section>
 
