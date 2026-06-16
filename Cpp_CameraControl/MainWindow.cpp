@@ -518,15 +518,17 @@ void MainWindow::buildUI() {
 
               struct FindData {
                 const QSet<DWORD> *pids;
+                DWORD excludePid; // cmd.exe console — not the Python GUI
                 HWND hwnd;
               };
-              FindData fd{&pids, nullptr};
+              FindData fd{&pids, rootPid, nullptr};
               EnumWindows(
                   [](HWND hwnd, LPARAM lp) -> BOOL {
                     auto *fd = reinterpret_cast<FindData *>(lp);
                     DWORD winPid = 0;
                     GetWindowThreadProcessId(hwnd, &winPid);
-                    if (fd->pids->contains(winPid) && IsWindowVisible(hwnd)) {
+                    if (winPid != fd->excludePid &&
+                        fd->pids->contains(winPid) && IsWindowVisible(hwnd)) {
                       fd->hwnd = hwnd;
                       return FALSE;
                     }
