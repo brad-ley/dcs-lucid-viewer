@@ -120,7 +120,7 @@ qt_add_executable(GenICamControl WIN32
 # Release builds go directly to the shared deployment folder.
 # Debug builds stay in the default CMake build tree.
 set_target_properties(GenICamControl PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE "Z:/Price/Software/arena-sdk/Release"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}"
 )
 
 # =============================================================================

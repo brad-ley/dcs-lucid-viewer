@@ -451,64 +451,102 @@ void MainWindow::buildUI() {
 
   QAction *viewerAction = toolsMenu->addAction("Image/Video Viewer");
   connect(viewerAction, &QAction::triggered, [this]() {
-    // If a viewer was launched before, check whether it is still alive.
-    // If yes, bring its window to the front instead of opening a second
-    // instance.
+    // Refocus the existing window if we already know its HWND.
+    HWND viewerHwnd = reinterpret_cast<HWND>(m_viewerHwnd);
+    if (viewerHwnd && IsWindow(viewerHwnd) && IsWindowVisible(viewerHwnd)) {
+      DWORD myTid = GetCurrentThreadId();
+      DWORD targetTid = GetWindowThreadProcessId(viewerHwnd, nullptr);
+      if (myTid != targetTid)
+        AttachThreadInput(myTid, targetTid, TRUE);
+      ShowWindow(viewerHwnd, SW_RESTORE);
+      BringWindowToTop(viewerHwnd);
+      SetForegroundWindow(viewerHwnd);
+      if (myTid != targetTid)
+        AttachThreadInput(myTid, targetTid, FALSE);
+      return;
+    }
+    m_viewerHwnd = 0;
+
+    // Guard against double-clicking while the window is still starting up.
     if (m_viewerPid != 0) {
-      HANDLE hProc =
+      HANDLE h =
           OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(m_viewerPid));
-      if (hProc) {
-        const bool alive = (WaitForSingleObject(hProc, 0) == WAIT_TIMEOUT);
-        CloseHandle(hProc);
-        if (alive) {
-          // Find the top-level window belonging to that PID and activate it.
-          struct FindData {
-            DWORD pid;
-            HWND hwnd;
-          };
-          FindData fd{static_cast<DWORD>(m_viewerPid), nullptr};
-          EnumWindows(
-              [](HWND hwnd, LPARAM lp) -> BOOL {
-                auto *fd = reinterpret_cast<FindData *>(lp);
-                DWORD winPid = 0;
-                GetWindowThreadProcessId(hwnd, &winPid);
-                if (winPid == fd->pid && IsWindowVisible(hwnd)) {
-                  fd->hwnd = hwnd;
-                  return FALSE;
-                }
-                return TRUE;
-              },
-              reinterpret_cast<LPARAM>(&fd));
-          if (fd.hwnd) {
-            // SetForegroundWindow() is silently blocked by Windows when
-            // our process doesn't own the foreground window.
-            // AttachThreadInput temporarily links our input queue to the
-            // target thread's, which grants the foreground-change right.
-            DWORD myTid = GetCurrentThreadId();
-            DWORD targetTid = GetWindowThreadProcessId(fd.hwnd, nullptr);
-            if (myTid != targetTid)
-              AttachThreadInput(myTid, targetTid, TRUE);
-
-            ShowWindow(fd.hwnd, SW_RESTORE);
-            BringWindowToTop(fd.hwnd);
-            SetForegroundWindow(fd.hwnd);
-
-            if (myTid != targetTid)
-              AttachThreadInput(myTid, targetTid, FALSE);
-          }
-          return;
-        }
-      }
+      const bool alive = h && (WaitForSingleObject(h, 0) == WAIT_TIMEOUT);
+      if (h)
+        CloseHandle(h);
+      if (alive)
+        return;
       m_viewerPid = 0;
     }
 
-    QProcess::startDetached(
-        "cmd.exe",
-        QStringList()
-            << "/c"
-            << "Z:\\6. "
-               "Software\\prod_code\\LucidVisionCamera\\lucid_viewer.bat",
-        QString(), &m_viewerPid);
+    if (!QProcess::startDetached(
+            "cmd.exe",
+            QStringList() << "/c"
+                          << "Z:\\6. Software\\prod_code\\LucidVisionCamera"
+                             "\\lucid_viewer.bat",
+            QString(), &m_viewerPid))
+      return;
+
+    // Poll until the Python window appears, then cache its HWND so subsequent
+    // clicks can refocus it without re-launching.
+    auto *pollTimer = new QTimer(this);
+    auto elapsedMs = std::make_shared<int>(0);
+    const DWORD rootPid = static_cast<DWORD>(m_viewerPid);
+
+    connect(pollTimer, &QTimer::timeout, this,
+            [this, pollTimer, elapsedMs, rootPid]() mutable {
+              *elapsedMs += 500;
+
+              // Walk the process tree rooted at cmd.exe (3 levels covers
+              // conda → python).
+              QSet<DWORD> pids;
+              pids.insert(rootPid);
+              HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+              if (snap != INVALID_HANDLE_VALUE) {
+                for (int pass = 0; pass < 3; ++pass) {
+                  PROCESSENTRY32W pe{};
+                  pe.dwSize = sizeof(pe);
+                  if (Process32FirstW(snap, &pe)) {
+                    do {
+                      if (pids.contains(pe.th32ParentProcessID))
+                        pids.insert(pe.th32ProcessID);
+                    } while (Process32NextW(snap, &pe));
+                  }
+                }
+                CloseHandle(snap);
+              }
+
+              struct FindData {
+                const QSet<DWORD> *pids;
+                HWND hwnd;
+              };
+              FindData fd{&pids, nullptr};
+              EnumWindows(
+                  [](HWND hwnd, LPARAM lp) -> BOOL {
+                    auto *fd = reinterpret_cast<FindData *>(lp);
+                    DWORD winPid = 0;
+                    GetWindowThreadProcessId(hwnd, &winPid);
+                    if (fd->pids->contains(winPid) && IsWindowVisible(hwnd)) {
+                      fd->hwnd = hwnd;
+                      return FALSE;
+                    }
+                    return TRUE;
+                  },
+                  reinterpret_cast<LPARAM>(&fd));
+
+              if (fd.hwnd) {
+                m_viewerHwnd = reinterpret_cast<qintptr>(fd.hwnd);
+                pollTimer->stop();
+                pollTimer->deleteLater();
+                return;
+              }
+
+              if (*elapsedMs >= 60000) {
+                pollTimer->stop();
+                pollTimer->deleteLater();
+              }
+            });
+    pollTimer->start(500);
   });
 
   QAction *scopeControlAction = toolsMenu->addAction("Scope Control Software");

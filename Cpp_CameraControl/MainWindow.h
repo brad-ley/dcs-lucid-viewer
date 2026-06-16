@@ -308,9 +308,14 @@ private:
     // and to adjust the "Acquisition finished" log message.
     bool m_isFieldCapture;
 
-    // PID of the last lucid_viewer process launched from the Tools menu.
-    // Used to re-focus the existing window instead of opening a second instance.
+    // PID of the cmd.exe that launched lucid_viewer (via lucid_viewer.bat).
+    // Guards against double-launching while the window is still starting up.
     qint64 m_viewerPid = 0;
+
+    // Native HWND of the lucid_viewer window once it has appeared.
+    // Stored as qintptr so MainWindow.h doesn't need <windows.h>.
+    // Used to refocus on subsequent "Image/Video Viewer" clicks.
+    qintptr m_viewerHwnd = 0;
 
     // PID of the cmd.exe that launched Scope Control (via run-scope-control.bat).
     // Used to detect whether a launch is still in progress (guards double-clicks).
