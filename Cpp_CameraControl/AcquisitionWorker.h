@@ -113,7 +113,10 @@ public:
     {
         None,        // Normal acquisition — save frames per the SaveFormat
         WhiteField,  // Capture bright reference — saves white_field_mean.tiff
-        DarkField    // Capture dark reference  — saves dark_field_mean.tiff
+        DarkField,   // Capture dark reference  — saves dark_field_mean.tiff
+        DotGrid,     // Capture dot-grid registration image — saves dot_grid_mean.tiff
+        Ambient,     // Capture ambient reference — saves ambient_mean.tiff
+        Custom       // Capture with user-defined base name — saves {name}_mean.tiff
     };
 
     // Constructor.
@@ -140,10 +143,15 @@ public:
     // Must be called BEFORE start().
     void setSaveFormat(SaveFormat format);
 
-    // Set the field type (None = normal acquisition; WhiteField / DarkField activates
+    // Set the field type (None = normal acquisition; field types activate
     // streaming Welford mean computation instead of per-frame file saving).
     // Must be called BEFORE start().
     void setFieldType(FieldType ft);
+
+    // For FieldType::Custom — the base name used for the output TIFF and metadata.
+    // E.g. "dot_grid" → dot_grid_mean.tiff.  Has no effect for other FieldTypes.
+    // Must be called BEFORE start().
+    void setCustomFieldName(const QString& name);
 
     // Optional custom name for the session subfolder (e.g. "calibration_run1").
     // If empty or not set, the folder name defaults to acq_YYYYMMDD_HHmmss.
@@ -242,6 +250,10 @@ private:
     // Optional custom name set by the user before start().
     // Empty string means "auto-generate from timestamp".
     QString m_customSessionName;
+
+    // Base name for the TIFF when FieldType::Custom is active.
+    // E.g. "dot_grid" → dot_grid_mean.tiff.  Empty when not a Custom capture.
+    QString m_customFieldName;
 
     // Free-form notes entered in the Notes dialog — written verbatim into metadata.json.
     QString m_notes;

@@ -158,6 +158,7 @@ AcquisitionWorker::AcquisitionWorker(QObject* parent)
     , m_fieldType(FieldType::None)
     , m_acquisitionDone(false)
     , m_customSessionName()      // Empty = auto-generate timestamp name
+    , m_customFieldName()        // Set only for FieldType::Custom
     , m_notes()                  // Empty = no notes
     , m_nodeMapSnapshotJson()    // Set by main thread via setNodeMapSnapshotJson() before start()
     , m_firstCameraFrameId(0)
@@ -227,6 +228,15 @@ void AcquisitionWorker::setFieldType(FieldType fieldType)
 void AcquisitionWorker::setCustomSessionName(const QString& name)
 {
     m_customSessionName = name.trimmed();
+}
+
+
+// =============================================================================
+// setCustomFieldName
+// =============================================================================
+void AcquisitionWorker::setCustomFieldName(const QString& name)
+{
+    m_customFieldName = name.trimmed();
 }
 
 
@@ -550,6 +560,13 @@ void AcquisitionWorker::run()
             formatString = "White Field capture (streaming Welford mean → white_field_mean.tiff)";
         else if (m_fieldType == FieldType::DarkField)
             formatString = "Dark Field capture (streaming Welford mean → dark_field_mean.tiff)";
+        else if (m_fieldType == FieldType::DotGrid)
+            formatString = "Dot Grid capture (streaming Welford mean → dot_grid_mean.tiff)";
+        else if (m_fieldType == FieldType::Ambient)
+            formatString = "Ambient capture (streaming Welford mean → ambient_mean.tiff)";
+        else if (m_fieldType == FieldType::Custom)
+            formatString = QString("Custom capture (streaming Welford mean → %1_mean.tiff)")
+                               .arg(m_customFieldName.isEmpty() ? "custom" : m_customFieldName);
         else
         {
             switch (m_saveFormat)
@@ -1088,8 +1105,19 @@ void AcquisitionWorker::run()
             // self-documenting when opened in ImageJ, Python (tifffile), etc.
             if (isFieldCapture && wf_n > 0)
             {
-                const std::string fieldTypeStr =
-                    (m_fieldType == FieldType::WhiteField) ? "white_field" : "dark_field";
+                std::string fieldTypeStr;
+                switch (m_fieldType) {
+                    case FieldType::WhiteField: fieldTypeStr = "white_field"; break;
+                    case FieldType::DarkField:  fieldTypeStr = "dark_field";  break;
+                    case FieldType::DotGrid:    fieldTypeStr = "dot_grid";    break;
+                    case FieldType::Ambient:    fieldTypeStr = "ambient";     break;
+                    case FieldType::Custom:
+                        fieldTypeStr = m_customFieldName.isEmpty()
+                                           ? "custom"
+                                           : m_customFieldName.toStdString();
+                        break;
+                    default: fieldTypeStr = "field"; break;
+                }
 
                 // Welford mode counted outlier pixels here — direct averaging has none.
                 // Kept commented so it's easy to wire back up when re-enabling Welford.
@@ -1814,6 +1842,19 @@ void AcquisitionWorker::writeMetadataJson(int64_t width, int64_t height,
     else if (m_fieldType == FieldType::DarkField)
     {
         formatString = "dark_field";
+    }
+    else if (m_fieldType == FieldType::DotGrid)
+    {
+        formatString = "dot_grid";
+    }
+    else if (m_fieldType == FieldType::Ambient)
+    {
+        formatString = "ambient";
+    }
+    else if (m_fieldType == FieldType::Custom)
+    {
+        formatString = m_customFieldName.isEmpty() ? "custom"
+                                                   : m_customFieldName.toStdString();
     }
     else
     {

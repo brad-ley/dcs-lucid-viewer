@@ -694,9 +694,10 @@ void MainWindow::buildUI() {
 
   toolsMenu->addSeparator();
 
-  // Field capture actions — forced 5-second acquisition, streaming Welford
-  // mean, saved as a single-page TIFF with outlier rejection.
-  QAction *whiteFieldAction = toolsMenu->addAction("Capture White Field");
+  // Field Capture submenu — forced 5-second Welford mean, saved as a single TIFF.
+  QMenu *fieldCaptureMenu = toolsMenu->addMenu("Field Capture");
+
+  QAction *whiteFieldAction = fieldCaptureMenu->addAction("White Field");
   whiteFieldAction->setToolTip(
       "Acquire 5 seconds of frames with the sample removed (or illuminated "
       "uniformly).\n"
@@ -704,12 +705,33 @@ void MainWindow::buildUI() {
   connect(whiteFieldAction, &QAction::triggered, this,
           &MainWindow::onCaptureWhiteField);
 
-  QAction *darkFieldAction = toolsMenu->addAction("Capture Dark Field");
+  QAction *darkFieldAction = fieldCaptureMenu->addAction("Dark Field");
   darkFieldAction->setToolTip(
       "Acquire 5 seconds of frames with the lens capped / illumination off.\n"
       "Saves a per-pixel outlier-rejected mean as dark_field_mean.tiff.");
   connect(darkFieldAction, &QAction::triggered, this,
           &MainWindow::onCaptureDarkField);
+
+  QAction *dotGridAction = fieldCaptureMenu->addAction("Dot Grid");
+  dotGridAction->setToolTip(
+      "Acquire 5 seconds of frames of the dot-grid registration target.\n"
+      "Saves a per-pixel outlier-rejected mean as dot_grid_mean.tiff.");
+  connect(dotGridAction, &QAction::triggered, this,
+          &MainWindow::onCaptureDotGrid);
+
+  QAction *ambientAction = fieldCaptureMenu->addAction("Ambient");
+  ambientAction->setToolTip(
+      "Acquire 5 seconds of frames under ambient/room light conditions.\n"
+      "Saves a per-pixel outlier-rejected mean as ambient_mean.tiff.");
+  connect(ambientAction, &QAction::triggered, this,
+          &MainWindow::onCaptureAmbient);
+
+  QAction *customFieldAction = fieldCaptureMenu->addAction("Custom…");
+  customFieldAction->setToolTip(
+      "Acquire 5 seconds of frames and save the mean using the name in the\n"
+      "Acquisition Name field (e.g. 'dot_grid' → dot_grid_mean.tiff).");
+  connect(customFieldAction, &QAction::triggered, this,
+          &MainWindow::onCaptureCustomField);
 
   // toolsMenu->addSeparator();
 
@@ -1959,7 +1981,7 @@ void MainWindow::applyPendingRoiToPanel() {
 }
 
 // =============================================================================
-// onCaptureWhiteField / onCaptureDarkField — Tools menu handlers
+// Field capture slot handlers — Tools > Field Capture submenu
 // =============================================================================
 void MainWindow::onCaptureWhiteField() {
   startFieldCapture(AcquisitionWorker::FieldType::WhiteField);
@@ -1967,6 +1989,27 @@ void MainWindow::onCaptureWhiteField() {
 
 void MainWindow::onCaptureDarkField() {
   startFieldCapture(AcquisitionWorker::FieldType::DarkField);
+}
+
+void MainWindow::onCaptureDotGrid() {
+  startFieldCapture(AcquisitionWorker::FieldType::DotGrid);
+}
+
+void MainWindow::onCaptureAmbient() {
+  startFieldCapture(AcquisitionWorker::FieldType::Ambient);
+}
+
+void MainWindow::onCaptureCustomField() {
+  const QString customName = m_sessionNameEdit->text().trimmed();
+  if (customName.isEmpty()) {
+    QMessageBox::warning(
+        this, "Custom Field Capture",
+        "Please enter a name in the Acquisition Name field before using "
+        "Custom capture.\n\nThe name becomes the output filename "
+        "(e.g. \"dot_grid\" → dot_grid_mean.tiff).");
+    return;
+  }
+  startFieldCapture(AcquisitionWorker::FieldType::Custom);
 }
 
 // =============================================================================
@@ -2003,11 +2046,18 @@ void MainWindow::startFieldCapture(AcquisitionWorker::FieldType ft) {
     return;
   }
 
-  // Build the session folder name: white_field_YYYYMMDD_HHmmss or
-  // dark_field_...
-  const QString prefix = (ft == AcquisitionWorker::FieldType::WhiteField)
-                             ? "white_field_"
-                             : "dark_field_";
+  // Build the session folder name: {type}_YYYYMMDD_HHmmss
+  QString prefix;
+  switch (ft) {
+  case AcquisitionWorker::FieldType::WhiteField: prefix = "white_field_"; break;
+  case AcquisitionWorker::FieldType::DarkField:  prefix = "dark_field_";  break;
+  case AcquisitionWorker::FieldType::DotGrid:    prefix = "dot_grid_";    break;
+  case AcquisitionWorker::FieldType::Ambient:    prefix = "ambient_";     break;
+  case AcquisitionWorker::FieldType::Custom:
+    prefix = m_sessionNameEdit->text().trimmed() + "_";
+    break;
+  default: prefix = "field_"; break;
+  }
   const QString sessionName =
       prefix + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
 
@@ -2035,6 +2085,8 @@ void MainWindow::startFieldCapture(AcquisitionWorker::FieldType ft) {
   m_worker->setSaveFormat(fieldFmt);
   m_worker->setFieldType(ft);
   m_worker->setCustomSessionName(sessionName);
+  if (ft == AcquisitionWorker::FieldType::Custom)
+    m_worker->setCustomFieldName(m_sessionNameEdit->text().trimmed());
   m_worker->setNotes(m_notesText);
   m_worker->setCameraParamsJson(paramsJson);
   m_worker->setNodeMapSnapshotJson(
@@ -2082,9 +2134,17 @@ void MainWindow::startFieldCapture(AcquisitionWorker::FieldType ft) {
   constexpr int fieldCaptureDurationMs = 5000;
   m_autoStopSecondsRemaining = 5;
 
-  const QString fieldLabel = (ft == AcquisitionWorker::FieldType::WhiteField)
-                                 ? "white field"
-                                 : "dark field";
+  QString fieldLabel;
+  switch (ft) {
+  case AcquisitionWorker::FieldType::WhiteField: fieldLabel = "white field"; break;
+  case AcquisitionWorker::FieldType::DarkField:  fieldLabel = "dark field";  break;
+  case AcquisitionWorker::FieldType::DotGrid:    fieldLabel = "dot grid";    break;
+  case AcquisitionWorker::FieldType::Ambient:    fieldLabel = "ambient";     break;
+  case AcquisitionWorker::FieldType::Custom:
+    fieldLabel = m_sessionNameEdit->text().trimmed();
+    break;
+  default: fieldLabel = "field"; break;
+  }
 
   m_stopButton->setText("Stop (auto 5s)");
   m_stopButton->setToolTip(

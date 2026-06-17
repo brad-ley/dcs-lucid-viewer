@@ -140,9 +140,12 @@ private slots:
     void onFpsTimerTick();         // Called every second to update the FPS display
 
     // --- Field capture slots ---
-    // Triggered from the Tools menu to start a white or dark field calibration capture.
+    // Triggered from the Tools > Field Capture submenu.
     void onCaptureWhiteField();
     void onCaptureDarkField();
+    void onCaptureDotGrid();
+    void onCaptureAmbient();
+    void onCaptureCustomField();
 
     // --- ROI slots ---
     // Called when the user finishes drawing an ROI in the Preview window.
