@@ -1,23 +1,9 @@
 @echo off
 
-set SCRIPT=lucid_viewer.py
+set "SCRIPT=Z:\6. Software\prod_code\LucidVisionCamera\lucid_viewer.py"
 set ENV_NAME=dcs-datascripts
-set REPO_URL=https://github.com/brad-ley/dcs-datascripts.git
 
-set DRIVE=Z:
-set "REPO_PATH=%DRIVE%\Price\Software\dcs-team\DataScripts"
-
-:: ── Prefer the network copy; fall back to a local clone ───────────────────────
-IF EXIST "%REPO_PATH%\%SCRIPT%" (
-    cd /d "%REPO_PATH%"
-) ELSE (
-    echo Network path not found. Cloning repo locally...
-    set "REPO_PATH=%USERPROFILE%\dcs-datascripts"
-    IF NOT EXIST "%USERPROFILE%\dcs-datascripts" (
-        git clone %REPO_URL% "%USERPROFILE%\dcs-datascripts"
-    )
-    cd /d "%USERPROFILE%\dcs-datascripts"
-)
+cd /d "Z:\6. Software\prod_code\LucidVisionCamera"
 
 :: ── Find conda ────────────────────────────────────────────────────────────────
 set CONDA1=%USERPROFILE%\AppData\Local\miniconda3\condabin\conda.bat
@@ -42,8 +28,8 @@ set "PYTHON=%CONDA_ROOT%\envs\%ENV_NAME%\python.exe"
 :: ── Create environment if missing ─────────────────────────────────────────────
 IF NOT EXIST "%PYTHON%" (
     echo Environment %ENV_NAME% not found. Creating from environment.yml...
-    CALL "%CONDA%" env create -n %ENV_NAME% -f environment.yml
+    CALL "%CONDA%" env create -n %ENV_NAME% -f "Z:\6. Software\prod_code\LucidVisionCamera\environment.yml"
 )
 
 :: ── Launch viewer ─────────────────────────────────────────────────────────────
-"%PYTHON%" %SCRIPT% %*
+"%PYTHON%" "%SCRIPT%" %*
