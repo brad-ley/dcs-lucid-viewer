@@ -14,6 +14,7 @@ import sys
 import os
 import json
 import struct
+import time
 import numpy as np
 
 from PyQt6.QtWidgets import (
@@ -23,7 +24,7 @@ from PyQt6.QtWidgets import (
     QSplitter, QMessageBox, QSlider, QCheckBox,
     QDialog, QProgressBar, QDialogButtonBox,
 )
-from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon
 from PyQt6.QtGui import QDesktopServices, QPainter, QColor, QPen
 
@@ -1026,6 +1027,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._white_field       = None   # float32 (H, W) averaged white frame, or None
         self._white_field_gain  = None   # float, average gain (dB) the white was captured at
         self._white_field_error = None   # str error message, or None
+        self._play_timer        = None   # QTimer driving playback
+        self._play_start_wall   = 0.0    # time.monotonic() when play started
+        self._play_start_ts_idx = 0      # frame index at play start
 
         self.setWindowTitle('LucidLabs ATX245 Viewer')
         self.resize(1300, 860)
@@ -1210,10 +1214,17 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.frame_slider.setMinimum(0)
         self.frame_slider.setMaximum(0)
         self.frame_slider.setEnabled(False)
+        rv.addWidget(self.frame_slider)
+
+        ctrl_row = QHBoxLayout()
+        self.play_btn = QPushButton('▶  Play')
+        self.play_btn.setFixedWidth(80)
+        self.play_btn.setEnabled(False)
+        ctrl_row.addWidget(self.play_btn)
         self.frame_label = QLabel('— / —')
         self.frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        rv.addWidget(self.frame_slider)
-        rv.addWidget(self.frame_label)
+        ctrl_row.addWidget(self.frame_label, stretch=1)
+        rv.addLayout(ctrl_row)
 
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
@@ -1237,11 +1248,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.dark_chk.toggled.connect(self._toggle_dark_field)
         self.white_chk.toggled.connect(self._toggle_white_field)
 
+        self.play_btn.clicked.connect(self._toggle_play)
+
         QShortcut(QKeySequence(Qt.Key.Key_Left),  self, lambda: self._step(-1))
         QShortcut(QKeySequence(Qt.Key.Key_Right), self, lambda: self._step(+1))
         QShortcut(QKeySequence(Qt.Key.Key_Home),  self, lambda: self._go(0))
         QShortcut(QKeySequence(Qt.Key.Key_End),   self,
                   lambda: self._go(self._reader_len() - 1))
+        QShortcut(QKeySequence(Qt.Key.Key_Space), self, self._toggle_play)
 
     # ── File loading ──────────────────────────────────────────────────────────
     def open_file(self):
@@ -1396,9 +1410,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.reload_btn.setEnabled(True)
         self._export_act.setEnabled(True)
 
+        self._stop_play()
         self.frame_slider.setMaximum(max(0, n - 1))
         self.frame_slider.setEnabled(n > 1)
         self.frame_slider.setValue(0)
+        self.play_btn.setEnabled(n > 1)
 
         self._trigger_frames = np.empty(0, dtype=np.intp)
         self._trigger_t0     = None
@@ -1492,6 +1508,69 @@ class LucidViewer(ViewerMixin, QMainWindow):
             return
         idx = max(0, min(idx, self._reader_len() - 1))
         self._show_frame(idx)
+
+    # ── Playback ──────────────────────────────────────────────────────────────
+    def _toggle_play(self):
+        if self._play_timer is not None and self._play_timer.isActive():
+            self._stop_play()
+        else:
+            self._start_play()
+
+    def _start_play(self):
+        if self._reader is None:
+            return
+        n = self._reader_len()
+        idx = self.frame_slider.value()
+        if idx >= n - 1:
+            idx = 0
+            self._show_frame(0)
+        self._play_start_wall   = time.monotonic()
+        self._play_start_ts_idx = idx
+        if self._play_timer is None:
+            self._play_timer = QTimer(self)
+            self._play_timer.timeout.connect(self._play_tick)
+        self._play_timer.start(100)   # 10 FPS cap
+        self.play_btn.setText('⏸  Pause')
+        self.frame_slider.setEnabled(False)
+
+    def _stop_play(self):
+        if self._play_timer is not None:
+            self._play_timer.stop()
+        self.play_btn.setText('▶  Play')
+        if self._reader is not None:
+            self.frame_slider.setEnabled(self._reader_len() > 1)
+
+    def _elapsed_in_ts_units(self, elapsed_s: float) -> float:
+        if self._ts_unit == 'ms':
+            return elapsed_s * 1000.0
+        if self._ts_unit == 'min':
+            return elapsed_s / 60.0
+        return elapsed_s  # 's' or no unit
+
+    def _play_tick(self):
+        if self._reader is None:
+            self._stop_play()
+            return
+        n   = self._reader_len()
+        ts  = self._timestamps
+        si  = self._play_start_ts_idx
+        elapsed = time.monotonic() - self._play_start_wall
+
+        if ts is not None and si < len(ts) and len(ts) >= 2:
+            elapsed_disp = self._elapsed_in_ts_units(elapsed)
+            target       = ts[si] + elapsed_disp
+            ts_slice     = ts[si : min(n, len(ts))]
+            pos  = int(np.searchsorted(ts_slice, target, side='right')) - 1
+            idx  = si + max(0, pos)
+            idx  = min(idx, n - 1)
+        else:
+            idx = min(si + int(elapsed * 10), n - 1)
+
+        if idx != self.frame_slider.value():
+            self._show_frame(idx)
+
+        if idx >= n - 1:
+            self._stop_play()
 
     def _on_roi_dragged(self):
         if self.imview.ui.roiBtn.isChecked():
@@ -2104,6 +2183,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self.statusBar().showMessage(f'Last file: {last}')
 
     def closeEvent(self, event):
+        self._stop_play()
         self._save_settings()
         if self._export_worker is not None:
             self._export_worker.cancel()
