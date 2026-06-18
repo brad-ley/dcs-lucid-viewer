@@ -2094,6 +2094,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             folder = self._find_field_folder('white_field')
             if folder:
                 n_frames = self._count_white_field_frames(folder)
+                print(f'[check_white] folder={os.path.basename(folder)}  n_frames={n_frames}')
                 flat_ok = n_frames >= 1
                 pca_ok  = n_frames >= 2
 
@@ -2140,16 +2141,22 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 fsize = os.path.getsize(fpath)
                 # Use n_frames from sidecar when present (exported files carry this)
                 n_sc = sidecar.get('n_frames')
+                print(f'[count_frames] {fname}: fmt={fmt} w={w} h={h} fsize={fsize} n_sc={n_sc}')
                 if n_sc is not None:
                     total += max(1, int(n_sc))
+                    print(f'[count_frames]   → sidecar n_frames={max(1, int(n_sc))}')
                     continue
                 try:
                     bpf   = frame_byte_count(fmt, w, h)
-                    total += max(1, int(fsize // bpf))
-                except Exception:
+                    count = max(1, int(fsize // bpf))
+                    print(f'[count_frames]   → bpf={bpf:.1f} count={count}')
+                    total += count
+                except Exception as exc:
                     # Unknown format — estimate conservatively at 2 bytes/pixel
                     bpf_est = w * h * 2
-                    total += max(1, int(fsize // bpf_est)) if bpf_est else 1
+                    count = (max(1, int(fsize // bpf_est)) if bpf_est else 1)
+                    print(f'[count_frames]   → frame_byte_count raised {exc!r}, fallback bpf={bpf_est} count={count}')
+                    total += count
             elif ext in ('.tiff', '.tif'):
                 try:
                     import tifffile
@@ -2270,6 +2277,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.corr_status_lbl.setText('Loading white field frames for PCA…')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
         frames = self._load_all_field_frames(folder)
+        print(f'[pca] _load_all_field_frames returned {len(frames)} frames from {os.path.basename(folder)}')
         if len(frames) < 2:
             self.corr_status_lbl.setText('PCA: need ≥2 white-field frames')
             self.white_combo.blockSignals(True)
