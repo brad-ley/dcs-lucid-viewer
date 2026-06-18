@@ -1840,6 +1840,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 d for d in all_entries
                 if keyword in d and os.path.isdir(os.path.join(search_dir, d))
             ]
+            print(f'[field] candidates in {search_dir!r}: {raw_candidates}')
             if exp_ts:
                 # Sort by absolute timestamp distance from experiment folder
                 candidates = sorted(raw_candidates,
