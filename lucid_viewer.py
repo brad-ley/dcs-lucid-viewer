@@ -1042,8 +1042,8 @@ class PcaComputeWorker(QThread):
         except Exception as exc:
             self.pca_error.emit(str(exc))
 
-    def _load_frames(self):
-        """Load every frame from folder as individual float32 arrays."""
+    def _load_frames(self, max_frames=150):
+        """Load up to max_frames evenly-sampled frames from folder as float32 arrays."""
         try:
             all_files = sorted(os.listdir(self._folder))
         except OSError:
@@ -1057,7 +1057,8 @@ class PcaComputeWorker(QThread):
         frames = []
         n = len(files)
         for i, fname in enumerate(files):
-            self.pca_progress.emit(f'Loading white-field frames ({i + 1}/{n})…')
+            if len(frames) >= max_frames:
+                break
             fpath = os.path.join(self._folder, fname)
             ext   = os.path.splitext(fname)[1].lower()
             try:
@@ -1068,7 +1069,16 @@ class PcaComputeWorker(QThread):
                     w = int(sidecar.get('width',  self._w))
                     h = int(sidecar.get('height', self._h))
                     r = RawReader(fpath, fmt, w, h)
-                    for j in range(len(r)):
+                    n_file = len(r)
+                    budget = max_frames - len(frames)
+                    if n_file <= budget:
+                        indices = range(n_file)
+                    else:
+                        indices = [int(k * n_file / budget) for k in range(budget)]
+                    self.pca_progress.emit(
+                        f'Loading white-field frames ({i + 1}/{n})'
+                        + (f' [{len(indices)}/{n_file}]' if len(indices) < n_file else '') + '…')
+                    for j in indices:
                         frames.append(r[j].astype(np.float32))
                     r.close()
                 elif ext in ('.tiff', '.tif'):
@@ -1077,7 +1087,16 @@ class PcaComputeWorker(QThread):
                     if data.ndim == 2:
                         frames.append(data.astype(np.float32))
                     else:
-                        for j in range(data.shape[0]):
+                        budget = max_frames - len(frames)
+                        n_file = data.shape[0]
+                        if n_file <= budget:
+                            indices = range(n_file)
+                        else:
+                            indices = [int(k * n_file / budget) for k in range(budget)]
+                        self.pca_progress.emit(
+                            f'Loading white-field frames ({i + 1}/{n})'
+                            + (f' [{len(indices)}/{n_file}]' if len(indices) < n_file else '') + '…')
+                        for j in indices:
                             frames.append(data[j].astype(np.float32))
             except Exception as e:
                 print(f'[pca] error loading {fname}: {e}')
@@ -1119,7 +1138,7 @@ class CellAdaptWorker(QThread):
             loader = PcaComputeWorker(self._folder, self._fmt, self._w, self._h)
             loader.pca_progress = self.adapt_progress  # forward progress messages
             self.adapt_progress.emit('Cell adaptation: loading frames…')
-            frames = loader._load_frames()
+            frames = loader._load_frames(max_frames=50)
             if not frames:
                 self.adapt_done.emit(None, None, None, None)
                 return
@@ -1439,14 +1458,14 @@ class _PcaSettingsDialog(QDialog):
             'Uses a pre-computed master PCA from a cell-free white field.\n'
             'Eigenvectors are adapted per-experiment via cell-mean scaling + QR\n'
             '— no SVD recomputation needed for each new cell.\n'
-            'Set master folder via:  Capture Fields → White field → Master…')
+            'Set master folder via:  Config → Set White Field → Master Clean PCA…')
         univ_note.setWordWrap(True)
         univ_note.setStyleSheet('color: #888; font-size: 10px;')
         layout.addWidget(univ_note)
 
         master_short = os.path.basename(master_folder) if master_folder else '(not set)'
         self._master_lbl = QLabel(f'Master folder: {master_short}')
-        self._master_lbl.setToolTip(master_folder or 'No master folder set — use Capture Fields menu')
+        self._master_lbl.setToolTip(master_folder or 'No master folder set — use Config → Set White Field → Master Clean PCA')
         self._master_lbl.setStyleSheet('color: #aaa; font-size: 10px;')
         layout.addWidget(self._master_lbl)
 
@@ -1660,23 +1679,21 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._export_gif_act.setEnabled(False)
         self._export_gif_act.triggered.connect(self._export_gif)
         file_menu.addAction(self._export_gif_act)
-        capture_menu = self.menuBar().addMenu('Capture &Fields')
-        white_menu = capture_menu.addMenu('&White field')
-        flat_act = QAction('&Flat field (mean)…', self)
+        config_menu = self.menuBar().addMenu('&Config')
+        white_menu = config_menu.addMenu('Set &White Field')
+        flat_act = QAction('&Flat Field…', self)
         flat_act.triggered.connect(self._select_white_flat_folder)
         white_menu.addAction(flat_act)
-        pca_act = QAction('&Multi-frame (PCA)…', self)
+        pca_act = QAction('&PCA…', self)
         pca_act.triggered.connect(self._select_white_pca_folder)
         white_menu.addAction(pca_act)
-        white_menu.addSeparator()
-        master_act = QAction('M&aster (clean, no cell)…', self)
+        master_act = QAction('&Master Clean PCA…', self)
         master_act.triggered.connect(self._select_master_folder)
         white_menu.addAction(master_act)
-        dark_cap_act = QAction('&Dark field…', self)
+        dark_cap_act = QAction('Set &Dark Field…', self)
         dark_cap_act.triggered.connect(self._select_dark_folder)
-        capture_menu.addAction(dark_cap_act)
-
-        config_menu = self.menuBar().addMenu('&Config')
+        config_menu.addAction(dark_cap_act)
+        config_menu.addSeparator()
         export_settings_act = QAction('&Export settings…', self)
         export_settings_act.triggered.connect(self._open_export_settings)
         config_menu.addAction(export_settings_act)
@@ -2431,8 +2448,12 @@ class LucidViewer(ViewerMixin, QMainWindow):
             return (sc.get('pixel_format') or sc.get('pixelformat')
                     or sc.get('PixelFormat') or sc.get('Pixel Format'))
 
+        MAX_FIELD_FRAMES = 100  # cap per-folder to avoid loading multi-GB master sequences
         frames = []
         for fname in files:
+            if len(frames) >= MAX_FIELD_FRAMES:
+                print(f'[field] hit {MAX_FIELD_FRAMES}-frame cap; skipping remaining files')
+                break
             fpath = os.path.join(folder, fname)
             ext   = os.path.splitext(fname)[1].lower()
             try:
@@ -2458,7 +2479,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     h = int(sidecar.get('height', default_h))
                     print(f'[field]   {fname}: fmt={fmt!r}, {w}x{h}  [{sidecar_status}]')
                     r = RawReader(fpath, fmt, w, h)
-                    for i in range(len(r)):
+                    n_file = len(r)
+                    budget = MAX_FIELD_FRAMES - len(frames)
+                    if n_file <= budget:
+                        indices = range(n_file)
+                    else:
+                        indices = [int(k * n_file / budget) for k in range(budget)]
+                        print(f'[field]   {fname}: subsampling {n_file} → {len(indices)} frames')
+                    for i in indices:
                         frames.append(r[i].astype(np.float32))
                     r.close()
                 elif ext in ('.tiff', '.tif'):
@@ -2467,7 +2495,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     if data.ndim == 2:
                         frames.append(data.astype(np.float32))
                     else:
-                        for i in range(data.shape[0]):
+                        budget = MAX_FIELD_FRAMES - len(frames)
+                        n_file = data.shape[0]
+                        if n_file <= budget:
+                            indices = range(n_file)
+                        else:
+                            indices = [int(k * n_file / budget) for k in range(budget)]
+                            print(f'[field]   {fname}: subsampling {n_file} → {len(indices)} frames')
+                        for i in indices:
                             frames.append(data[i].astype(np.float32))
                 print(f'[field]   loaded {fname}: {len(frames)} frames so far')
             except Exception as e:
@@ -2928,7 +2963,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         master = self._pca_master_folder
         if not master or not os.path.isdir(master):
             self.corr_status_lbl.setText('Universal PCA: master folder not set — '
-                                         'use Capture Fields → White field → Master…')
+                                         'use Config → Set White Field → Master Clean PCA…')
             self.corr_status_lbl.setStyleSheet('color: #c88; font-size: 10px;')
             return
 
@@ -3253,7 +3288,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._reload_fields()
 
     def _select_white_flat_folder(self):
-        """Capture Fields → White field → Flat field (mean)…"""
+        """Config → Set White Field → Flat Field…"""
         start = os.path.dirname(self._path) if self._path else ''
         folder = QFileDialog.getExistingDirectory(
             self, 'Select flat white field folder (mean)', start)
@@ -3270,7 +3305,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._reload_fields()
 
     def _select_white_pca_folder(self):
-        """Capture Fields → White field → Multi-frame (PCA)…"""
+        """Config → Set White Field → PCA…"""
         start = os.path.dirname(self._path) if self._path else ''
         folder = QFileDialog.getExistingDirectory(
             self, 'Select multi-frame white field folder (PCA)', start)
@@ -3288,7 +3323,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._reload_fields()
 
     def _select_master_folder(self):
-        """Capture Fields → White field → Master (clean, no cell)…"""
+        """Config → Set White Field → Master Clean PCA…"""
         start = os.path.dirname(self._path) if self._path else ''
         folder = QFileDialog.getExistingDirectory(
             self, 'Select master white field folder (clean, no cell)', start)
@@ -3362,25 +3397,21 @@ class LucidViewer(ViewerMixin, QMainWindow):
         parts = []
         has_error = False
 
-        if self._dark_field is not None:
-            if self._dark_field_error:
-                parts.append('Dark ✗')
-                has_error = True
+        if self._dark_field is not None and self._dark_field_error:
+            parts.append('Dark ✗')
+            has_error = True
 
         if self._white_mode == 'flat' and self._white_field is not None:
             if self._white_field_error:
                 parts.append('White ✗')
                 has_error = True
-            else:
-                parts.append('White ✓')
         elif self._white_mode == 'pca':
             if self._pca_components is not None:
-                parts.append(f'PCA ✓ (n={self._pca_n_components})')
+                parts.append(f'PCA  n={self._pca_n_components}')
             else:
                 parts.append('PCA …')
 
-        if parts:
-            self.corr_status_lbl.setText('  '.join(parts))
+        self.corr_status_lbl.setText('  '.join(parts))
         color = '#ff6b6b' if has_error else '#888'
         self.corr_status_lbl.setStyleSheet(f'color: {color}; font-size: 10px;')
 
@@ -3902,6 +3933,20 @@ QSlider::groove:horizontal { height: 4px; background: #444; border-radius: 2px; 
 QSlider::handle:horizontal { background: #888; border: 1px solid #aaa;
     width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }
 QSlider::handle:horizontal:hover { background: #aaa; }
+QSpinBox {
+    background: #3c3f41; color: #dddddd;
+    border: 1px solid #555; border-radius: 3px; padding: 2px 4px; }
+QSpinBox::up-button, QSpinBox::down-button {
+    background: #4c5052; border: none; width: 16px; }
+QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: #5c6062; }
+QSpinBox::up-arrow   { image: none; border-left: 4px solid transparent;
+    border-right: 4px solid transparent; border-bottom: 5px solid #aaaaaa;
+    width: 0; height: 0; }
+QSpinBox::down-arrow { image: none; border-left: 4px solid transparent;
+    border-right: 4px solid transparent; border-top: 5px solid #aaaaaa;
+    width: 0; height: 0; }
+QSpinBox::up-arrow:hover   { border-bottom-color: #dddddd; }
+QSpinBox::down-arrow:hover { border-top-color: #dddddd; }
 """
 
 if __name__ == '__main__':
