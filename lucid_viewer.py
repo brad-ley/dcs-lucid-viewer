@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QComboBox,
     QGroupBox, QGridLayout, QSpinBox, QFormLayout,
     QSplitter, QMessageBox, QSlider, QCheckBox,
-    QDialog, QProgressBar, QDialogButtonBox,
+    QDialog, QProgressBar, QDialogButtonBox, QFrame,
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon
@@ -1084,6 +1084,80 @@ class PcaComputeWorker(QThread):
         return frames
 
 
+class CellAdaptWorker(QThread):
+    """Adapt master PCA eigenvectors for a new sample cell without rerunning SVD.
+
+    Algorithm:
+      T_cell     = cell_mean / master_mean                (native-res scaling)
+      E_high_cell = E_high * T_cell                       (adapted synthesis basis)
+      T_cell_low = blur(cell_mean) / master_mean_low      (blurred-space scaling)
+      E_low_cell  = E_low  * T_cell_low
+      Q_low, _   = qr(E_low_cell.T)  → Q_low.T           (re-orthogonalize)
+    """
+
+    adapt_done     = pyqtSignal(object, object, object, object)  # cell_mean, E_high_cell, mu_low_cell, Q_low
+    adapt_progress = pyqtSignal(str)
+
+    def __init__(self, folder, fmt, w, h,
+                 master_mean, master_components,
+                 master_mean_low, master_components_low,
+                 blur_sigma=0, parent=None):
+        super().__init__(parent)
+        self._folder                 = folder
+        self._fmt                    = fmt
+        self._w                      = w
+        self._h                      = h
+        self._master_mean            = master_mean
+        self._master_components      = master_components
+        self._master_mean_low        = master_mean_low
+        self._master_components_low  = master_components_low
+        self._blur_sigma             = blur_sigma
+
+    def run(self):
+        try:
+            # Reuse PcaComputeWorker's loader by creating a minimal instance just to call _load_frames
+            loader = PcaComputeWorker(self._folder, self._fmt, self._w, self._h)
+            loader.pca_progress = self.adapt_progress  # forward progress messages
+            self.adapt_progress.emit('Cell adaptation: loading frames…')
+            frames = loader._load_frames()
+            if not frames:
+                self.adapt_done.emit(None, None, None, None)
+                return
+
+            self.adapt_progress.emit(f'Cell adaptation: averaging {len(frames)} frames…')
+            stack = np.stack([f.astype(np.float32) for f in frames], axis=0)
+            cell_mean_2d = stack.mean(axis=0)                           # (H, W)
+            cell_mean    = cell_mean_2d.ravel()                         # (H*W,)
+
+            mu_master = np.maximum(self._master_mean, np.float32(1e-3))
+            T_cell    = cell_mean / mu_master                           # (H*W,)
+
+            E_high      = self._master_components                       # (n, H*W)
+            E_high_cell = np.ascontiguousarray((E_high * T_cell).astype(np.float32))
+
+            if (self._blur_sigma > 0
+                    and self._master_mean_low is not None
+                    and self._master_components_low is not None):
+                from scipy.ndimage import gaussian_filter
+                self.adapt_progress.emit('Cell adaptation: blurring cell mean…')
+                mu_low_cell = gaussian_filter(
+                    cell_mean_2d, sigma=float(self._blur_sigma)).ravel().astype(np.float32)
+                mu_master_low = np.maximum(self._master_mean_low, np.float32(1e-3))
+                T_cell_low    = mu_low_cell / mu_master_low             # (H*W,)
+                E_low_cell    = self._master_components_low * T_cell_low  # (n, H*W)
+
+                self.adapt_progress.emit('Cell adaptation: re-orthogonalizing…')
+                Q, _ = np.linalg.qr(E_low_cell.T)                      # (H*W, n)
+                Q_low = np.ascontiguousarray(Q.T.astype(np.float32))   # (n, H*W)
+
+                self.adapt_done.emit(cell_mean, E_high_cell, mu_low_cell, Q_low)
+            else:
+                self.adapt_done.emit(cell_mean, E_high_cell, None, None)
+        except Exception as exc:
+            self.adapt_progress.emit(f'Cell adaptation error: {exc}')
+            self.adapt_done.emit(None, None, None, None)
+
+
 TIFF_COMPRESSIONS = ['None', 'LZW', 'Deflate', 'ZSTD']
 
 
@@ -1310,29 +1384,32 @@ class _GifExportDialog(QDialog):
 
 
 class _PcaSettingsDialog(QDialog):
-    """PCA-specific settings: Gaussian-blur dual-resolution projection toggle."""
+    """PCA-specific settings: Gaussian-blur dual-resolution projection and universal mode."""
 
-    def __init__(self, blur_enabled, blur_sigma, parent=None, stylesheet=''):
+    def __init__(self, blur_enabled, blur_sigma,
+                 universal_enabled=False, master_folder='',
+                 parent=None, stylesheet=''):
         super().__init__(parent)
         self.setWindowTitle('PCA Settings')
-        self.setMinimumWidth(300)
+        self.setMinimumWidth(360)
         if stylesheet:
             self.setStyleSheet(stylesheet)
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
         layout.setContentsMargins(12, 12, 12, 12)
 
+        # ── Gaussian blur ──────────────────────────────────────────────────────
         self._blur_chk = QCheckBox('Enable Gaussian blur for temporal weight projection')
         self._blur_chk.setChecked(blur_enabled)
         layout.addWidget(self._blur_chk)
 
-        note = QLabel(
+        blur_note = QLabel(
             'Blurs each sample frame before projecting onto the low-resolution PCA\n'
             'basis to estimate beam weights without sample contamination.\n'
             'Requires a second PCA pass during white-field computation.')
-        note.setWordWrap(True)
-        note.setStyleSheet('color: #888; font-size: 10px;')
-        layout.addWidget(note)
+        blur_note.setWordWrap(True)
+        blur_note.setStyleSheet('color: #888; font-size: 10px;')
+        layout.addWidget(blur_note)
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -1346,6 +1423,32 @@ class _PcaSettingsDialog(QDialog):
         layout.addLayout(form)
 
         self._blur_chk.toggled.connect(self._sigma_spin.setEnabled)
+
+        # ── Separator ─────────────────────────────────────────────────────────
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(sep)
+
+        # ── Universal mode ────────────────────────────────────────────────────
+        self._universal_chk = QCheckBox('Universal mode (master no-cell basis)')
+        self._universal_chk.setChecked(universal_enabled)
+        layout.addWidget(self._universal_chk)
+
+        univ_note = QLabel(
+            'Uses a pre-computed master PCA from a cell-free white field.\n'
+            'Eigenvectors are adapted per-experiment via cell-mean scaling + QR\n'
+            '— no SVD recomputation needed for each new cell.\n'
+            'Set master folder via:  Capture Fields → White field → Master…')
+        univ_note.setWordWrap(True)
+        univ_note.setStyleSheet('color: #888; font-size: 10px;')
+        layout.addWidget(univ_note)
+
+        master_short = os.path.basename(master_folder) if master_folder else '(not set)'
+        self._master_lbl = QLabel(f'Master folder: {master_short}')
+        self._master_lbl.setToolTip(master_folder or 'No master folder set — use Capture Fields menu')
+        self._master_lbl.setStyleSheet('color: #aaa; font-size: 10px;')
+        layout.addWidget(self._master_lbl)
 
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
                                 QDialogButtonBox.StandardButton.Cancel)
@@ -1361,6 +1464,10 @@ class _PcaSettingsDialog(QDialog):
     @property
     def blur_sigma(self):
         return self._sigma_spin.value()
+
+    @property
+    def universal_enabled(self):
+        return self._universal_chk.isChecked()
 
 
 # ── Trigger-aware slider ──────────────────────────────────────────────────────
@@ -1511,6 +1618,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_components_low    = None  # (n_stored, H*W) float32 low-res eigenvectors
         self._pca_blur_enabled      = False # loaded from QSettings
         self._pca_blur_sigma        = 400   # Gaussian blur sigma for low-res pass (px)
+        self._pca_universal             = False  # use master basis + cell-mean adaptation
+        self._pca_master_folder         = ''     # path to master (no-cell) white field folder
+        self._pca_master_mean           = None   # (H*W,) float32 master no-cell mean
+        self._pca_master_components     = None   # (n, H*W) float32 master eigenvectors
+        self._pca_master_mean_low       = None   # (H*W,) float32 master blurred mean
+        self._pca_master_components_low = None   # (n, H*W) float32 master blurred eigenvectors
+        self._cell_adapt_worker         = None   # CellAdaptWorker while adapting
         self._stored_field_refs = {}     # field_references loaded from sidecar
         self._play_timer        = None   # QTimer driving playback
         self._play_start_wall   = 0.0    # time.monotonic() when play started
@@ -1546,13 +1660,21 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._export_gif_act.setEnabled(False)
         self._export_gif_act.triggered.connect(self._export_gif)
         file_menu.addAction(self._export_gif_act)
-        file_menu.addSeparator()
-        set_white_act = QAction('Set &white field folder…', self)
-        set_white_act.triggered.connect(self._select_white_folder)
-        file_menu.addAction(set_white_act)
-        set_dark_act = QAction('Set &dark field folder…', self)
-        set_dark_act.triggered.connect(self._select_dark_folder)
-        file_menu.addAction(set_dark_act)
+        capture_menu = self.menuBar().addMenu('Capture &Fields')
+        white_menu = capture_menu.addMenu('&White field')
+        flat_act = QAction('&Flat field (mean)…', self)
+        flat_act.triggered.connect(self._select_white_flat_folder)
+        white_menu.addAction(flat_act)
+        pca_act = QAction('&Multi-frame (PCA)…', self)
+        pca_act.triggered.connect(self._select_white_pca_folder)
+        white_menu.addAction(pca_act)
+        white_menu.addSeparator()
+        master_act = QAction('M&aster (clean, no cell)…', self)
+        master_act.triggered.connect(self._select_master_folder)
+        white_menu.addAction(master_act)
+        dark_cap_act = QAction('&Dark field…', self)
+        dark_cap_act.triggered.connect(self._select_dark_folder)
+        capture_menu.addAction(dark_cap_act)
 
         config_menu = self.menuBar().addMenu('&Config')
         export_settings_act = QAction('&Export settings…', self)
@@ -1631,7 +1753,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         meta_grid.setSpacing(4)
 
         self._meta_vals = []
-        for row, key in enumerate(['File:', 'Format:', 'Frames:', 'FPS:', 'Size:', 'Acquired:', 'Notes:']):
+        for row, key in enumerate(['Folder:', 'File:', 'Format:', 'Frames:', 'FPS:', 'Size:', 'Acquired:', 'Notes:']):
             lbl = QLabel(key)
             lbl.setStyleSheet('font-weight: bold;')
             meta_grid.addWidget(lbl, row, 0)
@@ -1936,6 +2058,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         acq   = self._sidecar_acq_time or '—'
         notes = self._sidecar_notes    or '—'
         for lbl, val in zip(self._meta_vals, [
+            os.path.basename(os.path.dirname(path)),
             os.path.basename(path),
             fmt if ext == '.raw' else ext.lstrip('.').upper(),
             str(n),
@@ -2636,6 +2759,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _compute_or_load_pca(self):
         """Load cached PCA basis or compute from white_field frames (async)."""
+        if self._pca_universal:
+            self._compute_universal_pca()
+            return
+
         folder = self._find_field_folder('white_field', min_frames=2, sidecar_key='white_pca_folder')
         if folder is None:
             self.corr_status_lbl.setText('white_field folder not found')
@@ -2754,23 +2881,176 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.corr_status_lbl.setStyleSheet('color: #aaa; font-size: 10px;')
         self.statusBar().showMessage(msg)
 
+    # ------------------------------------------------------------------ #
+    # Universal PCA (cell-transform) methods                               #
+    # ------------------------------------------------------------------ #
+
+    def _compute_universal_pca(self):
+        """Load or compute master PCA, then adapt it to the current cell folder."""
+        master = self._pca_master_folder
+        if not master or not os.path.isdir(master):
+            self.corr_status_lbl.setText('Universal PCA: master folder not set — '
+                                         'use Capture Fields → White field → Master…')
+            self.corr_status_lbl.setStyleSheet('color: #c88; font-size: 10px;')
+            return
+
+        h   = self._reader.h if self._reader else self.h_spin.value()
+        w   = self._reader.w if self._reader else self.w_spin.value()
+        cache_path = self._pca_cache_path(master, h, w)
+
+        # Try to use already-loaded master arrays (same session).
+        if (self._pca_master_mean is not None
+                and self._pca_master_components is not None):
+            self._launch_cell_adapt_worker(
+                self._pca_master_mean, self._pca_master_components,
+                self._pca_master_mean_low, self._pca_master_components_low)
+            return
+
+        # Try disk cache.
+        if self._pca_cache_valid(cache_path, master):
+            try:
+                data = np.load(cache_path)
+                mu   = data['mean']
+                comp = data['components']
+                if mu.shape[0] == h * w:
+                    mu_low   = data.get('mean_low',       None)
+                    comp_low = data.get('components_low', None)
+                    self._pca_master_mean            = mu
+                    self._pca_master_components      = comp
+                    self._pca_master_mean_low        = mu_low
+                    self._pca_master_components_low  = comp_low
+                    self._launch_cell_adapt_worker(mu, comp, mu_low, comp_low)
+                    return
+            except Exception as exc:
+                print(f'[pca] master cache load error: {exc}')
+
+        # Compute master PCA from scratch.
+        fmt = self.fmt_combo.currentText()
+        self.corr_status_lbl.setText('Computing master PCA…')
+        self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+        blur_sigma = self._pca_blur_sigma if self._pca_blur_enabled else 0
+        if self._pca_worker is not None:
+            self._pca_worker.pca_done.disconnect()
+            self._pca_worker.pca_error.disconnect()
+            self._pca_worker.pca_progress.disconnect()
+            self._pca_worker.quit()
+        self._pca_worker = PcaComputeWorker(
+            master, fmt, w, h, blur_sigma=blur_sigma, parent=self)
+        self._pca_worker.pca_done.connect(
+            lambda mu, comp, expl, mu_low, comp_low, _cp=cache_path:
+                self._on_master_pca_computed(mu, comp, expl, mu_low, comp_low, _cp)
+        )
+        self._pca_worker.pca_error.connect(self._on_pca_error)
+        self._pca_worker.pca_progress.connect(self._on_pca_progress)
+        self._pca_worker.start()
+
+    def _on_master_pca_computed(self, mean, components, explained,
+                                mean_low, components_low, cache_path):
+        """Store master arrays, cache to disk, then kick off cell adaptation."""
+        try:
+            save_kw = dict(mean=mean, components=components, explained=explained)
+            if mean_low is not None and components_low is not None:
+                save_kw['mean_low']       = mean_low
+                save_kw['components_low'] = components_low
+            np.savez_compressed(cache_path, **save_kw)
+        except Exception as exc:
+            print(f'[pca] master cache save error: {exc}')
+        self._pca_master_mean            = mean
+        self._pca_master_components      = components
+        self._pca_master_mean_low        = mean_low
+        self._pca_master_components_low  = components_low
+        self._launch_cell_adapt_worker(mean, components, mean_low, components_low)
+
+    def _launch_cell_adapt_worker(self, master_mean, master_comp,
+                                  master_mean_low, master_comp_low):
+        """Find the cell PCA folder and start CellAdaptWorker."""
+        folder = self._find_field_folder('white_field', min_frames=2,
+                                         sidecar_key='white_pca_folder')
+        if folder is None:
+            self.corr_status_lbl.setText('Universal PCA: cell white_field folder not found')
+            self.corr_status_lbl.setStyleSheet('color: #c88; font-size: 10px;')
+            return
+
+        h   = self._reader.h if self._reader else self.h_spin.value()
+        w   = self._reader.w if self._reader else self.w_spin.value()
+        fmt = self.fmt_combo.currentText()
+        blur_sigma = self._pca_blur_sigma if self._pca_blur_enabled else 0
+
+        self.corr_status_lbl.setText('Cell adaptation: loading frames…')
+        self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+
+        if self._cell_adapt_worker is not None:
+            self._cell_adapt_worker.adapt_done.disconnect()
+            self._cell_adapt_worker.adapt_progress.disconnect()
+            self._cell_adapt_worker.quit()
+
+        self._cell_adapt_worker = CellAdaptWorker(
+            folder, fmt, w, h,
+            master_mean, master_comp,
+            master_mean_low, master_comp_low,
+            blur_sigma=blur_sigma, parent=self)
+        self._cell_adapt_worker.adapt_done.connect(
+            lambda cm, eh, ml, ql, _f=folder: self._on_cell_adapted(cm, eh, ml, ql, _f))
+        self._cell_adapt_worker.adapt_progress.connect(self._on_pca_progress)
+        self._cell_adapt_worker.start()
+
+    def _on_cell_adapted(self, cell_mean, e_high_cell, mu_low_cell, q_low, folder):
+        """Slot adapted eigenvectors into the projection pipeline."""
+        if cell_mean is None:
+            self.corr_status_lbl.setText('Cell adaptation failed — check console')
+            self.corr_status_lbl.setStyleSheet('color: #c88; font-size: 10px;')
+            return
+        self._pca_mean       = cell_mean
+        self._pca_components = e_high_cell
+        if mu_low_cell is not None and q_low is not None:
+            self._pca_mean_low       = mu_low_cell
+            self._pca_components_low = q_low
+        else:
+            self._pca_mean_low       = None
+            self._pca_components_low = None
+        h = self._reader.h if self._reader else self.h_spin.value()
+        w = self._reader.w if self._reader else self.w_spin.value()
+        self._pca_shape  = (h, w)
+        self._pca_folder = folder
+        self._white_mode = 'pca'
+        n = e_high_cell.shape[0]
+        blur_tag = f'  [blur σ={self._pca_blur_sigma}px]' if self._pca_blur_enabled else ''
+        self.corr_status_lbl.setText(
+            f'PCA ✓  universal {n} comp (cell-adapted){blur_tag}')
+        self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+        self.statusBar().clearMessage()
+        self.white_chk.setToolTip(
+            f'Using: {os.path.basename(folder)}  [master: {os.path.basename(self._pca_master_folder)}]\n'
+            f'Path: {folder}\n\n'
+            'Universal PCA: master basis adapted per-cell via element-wise scaling.')
+        self._refresh_current_frame()
+        self._auto_levels()
+
     def _open_pca_settings(self):
         dlg = _PcaSettingsDialog(
             self._pca_blur_enabled, self._pca_blur_sigma,
+            universal_enabled=self._pca_universal,
+            master_folder=self._pca_master_folder,
             parent=self, stylesheet=self.styleSheet())
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        new_enabled = dlg.blur_enabled
-        new_sigma   = dlg.blur_sigma
-        changed = (new_enabled != self._pca_blur_enabled or
-                   (new_enabled and new_sigma != self._pca_blur_sigma))
+        new_enabled   = dlg.blur_enabled
+        new_sigma     = dlg.blur_sigma
+        new_universal = dlg.universal_enabled
+        blur_changed      = (new_enabled != self._pca_blur_enabled or
+                             (new_enabled and new_sigma != self._pca_blur_sigma))
+        universal_changed = new_universal != self._pca_universal
         self._pca_blur_enabled = new_enabled
         self._pca_blur_sigma   = new_sigma
+        self._pca_universal    = new_universal
         self._settings.setValue('pca/blur_enabled', self._pca_blur_enabled)
         self._settings.setValue('pca/blur_sigma',   self._pca_blur_sigma)
-        if changed and self._white_mode == 'pca':
-            self._pca_mean_low       = None
-            self._pca_components_low = None
+        self._settings.setValue('pca/universal',    self._pca_universal)
+        if (blur_changed or universal_changed) and self._white_mode == 'pca':
+            self._pca_mean_low          = None
+            self._pca_components_low    = None
+            self._pca_master_mean       = None  # force master reload on blur-sigma change
+            self._pca_master_components = None
             self._compute_or_load_pca()
 
     def _on_pca_error(self, msg):
@@ -2820,6 +3100,12 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self._pca_n_lbl.setVisible(combo_idx == 1)
                     self.pca_n_spin.setVisible(combo_idx == 1)
                     self._pca_settings_btn.setVisible(combo_idx == 1)
+
+        if white_mode == 'pca' and refs.get('pca_universal'):
+            master = refs.get('white_pca_master_folder', '')
+            if master and os.path.isdir(master):
+                self._pca_universal     = True
+                self._pca_master_folder = master
 
     def _get_or_create_sidecar_path(self):
         """Return best sidecar path for writing.
@@ -2875,6 +3161,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         elif self._white_mode == 'pca' and self._pca_components is not None and self._pca_folder:
             updates['white_pca_folder'] = self._pca_folder
             updates['white_mode'] = 'pca'
+            if self._pca_universal and self._pca_master_folder:
+                updates['white_pca_master_folder'] = self._pca_master_folder
+                updates['pca_universal'] = True
         if not updates:
             self.corr_status_lbl.setText('No active fields to store')
             self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
@@ -2925,6 +3214,58 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._check_white_options()
         if self.white_chk.isChecked():
             self._reload_fields()
+
+    def _select_white_flat_folder(self):
+        """Capture Fields → White field → Flat field (mean)…"""
+        start = os.path.dirname(self._path) if self._path else ''
+        folder = QFileDialog.getExistingDirectory(
+            self, 'Select flat white field folder (mean)', start)
+        if not folder:
+            return
+        self._stored_field_refs['white_folder'] = folder
+        self._check_white_options()
+        # Switch combo to flat if possible
+        if self.white_combo.count() > 0:
+            self.white_combo.blockSignals(True)
+            self.white_combo.setCurrentIndex(0)
+            self.white_combo.blockSignals(False)
+        if self.white_chk.isChecked():
+            self._reload_fields()
+
+    def _select_white_pca_folder(self):
+        """Capture Fields → White field → Multi-frame (PCA)…"""
+        start = os.path.dirname(self._path) if self._path else ''
+        folder = QFileDialog.getExistingDirectory(
+            self, 'Select multi-frame white field folder (PCA)', start)
+        if not folder:
+            return
+        self._stored_field_refs['white_pca_folder'] = folder
+        self._stored_field_refs['white_folder']     = folder
+        self._check_white_options()
+        # Switch combo to PCA if possible
+        if self.white_combo.count() > 1:
+            self.white_combo.blockSignals(True)
+            self.white_combo.setCurrentIndex(1)
+            self.white_combo.blockSignals(False)
+        if self.white_chk.isChecked():
+            self._reload_fields()
+
+    def _select_master_folder(self):
+        """Capture Fields → White field → Master (clean, no cell)…"""
+        start = os.path.dirname(self._path) if self._path else ''
+        folder = QFileDialog.getExistingDirectory(
+            self, 'Select master white field folder (clean, no cell)', start)
+        if not folder:
+            return
+        self._pca_master_folder = folder
+        # Clear cached master arrays so they're reloaded from the new folder
+        self._pca_master_mean            = None
+        self._pca_master_components      = None
+        self._pca_master_mean_low        = None
+        self._pca_master_components_low  = None
+        self._settings.setValue('pca/master_folder', folder)
+        if self._pca_universal and self._white_mode == 'pca':
+            self._compute_or_load_pca()
 
     def _select_dark_folder(self):
         """File menu: let user manually choose a dark field folder."""
@@ -3457,6 +3798,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         s.setValue('pca_n_components',    self.pca_n_spin.value())
         s.setValue('pca/blur_enabled',    self._pca_blur_enabled)
         s.setValue('pca/blur_sigma',      self._pca_blur_sigma)
+        s.setValue('pca/universal',       self._pca_universal)
+        s.setValue('pca/master_folder',   self._pca_master_folder)
         s.setValue('export_compression',  self._export_compression)
         s.setValue('trigger_bit',         self._trigger_bit)
 
@@ -3504,8 +3847,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.white_combo.setCurrentIndex(combo_idx)
         self.white_combo.blockSignals(False)
         self.pca_n_spin.setValue(s.value('pca_n_components', 5, type=int))
-        self._pca_blur_enabled = s.value('pca/blur_enabled', False, type=bool)
-        self._pca_blur_sigma   = s.value('pca/blur_sigma',   400,   type=int)
+        self._pca_blur_enabled  = s.value('pca/blur_enabled',  False, type=bool)
+        self._pca_blur_sigma    = s.value('pca/blur_sigma',    400,   type=int)
+        self._pca_universal     = s.value('pca/universal',     False, type=bool)
+        self._pca_master_folder = s.value('pca/master_folder', '',    type=str)
         pca_visible = chk_checked and (combo_idx == 1)
         self._pca_n_lbl.setVisible(pca_visible)
         self.pca_n_spin.setVisible(pca_visible)
@@ -3520,6 +3865,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if self._pca_worker is not None:
             self._pca_worker.quit()
             self._pca_worker.wait(2000)
+        if self._cell_adapt_worker is not None:
+            self._cell_adapt_worker.quit()
+            self._cell_adapt_worker.wait(2000)
         if self._export_worker is not None:
             self._export_worker.cancel()
             self._export_worker.wait()
