@@ -2444,11 +2444,26 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _reload_fields(self):
         """Reload whichever field references are currently selected for the new file."""
+        _dark_tip_default = ('Finds closest dark_field_* folder by timestamp\n'
+                             'and averages all frames as the dark reference.')
+        _white_tip_default = ('None: no white-field correction\n'
+                              'Flat field: divide by averaged white-field frames\n'
+                              'PCA removal: project each frame onto a PCA basis built from white-field\n'
+                              '  frames and subtract the estimated background\n\n'
+                              'Disabled options mean no compatible white_field folder was found.')
+
         if self.dark_chk.isChecked():
             folder = self._find_field_folder('dark_field')
             self._dark_field       = self._load_field_frame(folder) if folder else None
             self._dark_field_gain  = self._read_average_gain(folder) if folder else None
             self._dark_field_error = self._check_field_shape(self._dark_field, 'dark')
+            if folder and self._dark_field is not None:
+                self.dark_chk.setToolTip(
+                    f'Using: {os.path.basename(folder)}\n'
+                    f'Path: {folder}\n\n'
+                    'Averages all frames as the dark reference.')
+            else:
+                self.dark_chk.setToolTip(_dark_tip_default)
 
         mode_idx = self.white_combo.currentIndex()
         if mode_idx == 1:
@@ -2457,8 +2472,15 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._white_field_gain  = self._read_average_gain(folder) if folder else None
             self._white_field_error = self._check_field_shape(self._white_field, 'white')
             self._white_mode        = 'flat'
+            if folder and self._white_field is not None:
+                self.white_combo.setToolTip(
+                    f'Using: {os.path.basename(folder)}\n'
+                    f'Path: {folder}\n\n'
+                    'Flat field: divides each frame by the averaged white-field frames.')
+            else:
+                self.white_combo.setToolTip(_white_tip_default)
         elif mode_idx == 2:
-            self._compute_or_load_pca()
+            self._compute_or_load_pca()  # tooltip updated inside _compute_or_load_pca/_on_pca_computed
         else:
             self._white_mode        = 'none'
             self._white_field       = None
@@ -2466,6 +2488,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._white_field_error = None
             self._pca_mean          = None
             self._pca_components    = None
+            self.white_combo.setToolTip(_white_tip_default)
         self._refresh_corr_status()
 
     def _check_field_shape(self, field, name: str):

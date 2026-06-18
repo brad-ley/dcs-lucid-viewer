@@ -179,9 +179,18 @@ public class Lucid_Raw_Corrector implements PlugIn {
     // ── Field selection / loading ─────────────────────────────────────────────
     static class Field { File folder; double gain; Field(File f, double g){folder=f;gain=g;} }
 
-    /** Folders containing keyword, most-recent first, taken from the first of
-     *  [dataDir, dataDir/..] that has any match — mirrors lucid_viewer.py. */
-    static List<Field> findCandidates(File dataDir, String keyword) {
+    /** Concatenate all digit characters from a folder name into a long for timestamp comparison.
+     *  E.g. "white_field_20240117_143022" → 20240117143022L. Returns 0 if no digits. */
+    static long folderTimestamp(String name) {
+        StringBuilder sb = new StringBuilder();
+        for (char c : name.toCharArray()) if (Character.isDigit(c)) sb.append(c);
+        if (sb.length() == 0) return 0L;
+        try { return Long.parseLong(sb.toString()); } catch (NumberFormatException e) { return 0L; }
+    }
+
+    /** Folders containing keyword, sorted by closestTimestamp or reverse-name, taken from the
+     *  first of [dataDir, dataDir/..] that has any match — mirrors lucid_viewer.py. */
+    static List<Field> findCandidates(File dataDir, String keyword, boolean closestTimestamp) {
         List<Field> out = new ArrayList<>();
         File[] searchDirs = { dataDir, dataDir != null ? dataDir.getParentFile() : null };
         for (File sd : searchDirs) {
@@ -192,7 +201,12 @@ public class Lucid_Raw_Corrector implements PlugIn {
             for (File k : kids)
                 if (k.isDirectory() && k.getName().contains(keyword)) matches.add(k);
             if (!matches.isEmpty()) {
-                matches.sort(Comparator.comparing(File::getName).reversed());  // most-recent first
+                if (closestTimestamp) {
+                    final long expTs = folderTimestamp(dataDir.getName());
+                    matches.sort(Comparator.comparingLong(f -> Math.abs(folderTimestamp(f.getName()) - expTs)));
+                } else {
+                    matches.sort(Comparator.comparing(File::getName).reversed());
+                }
                 for (File m : matches) out.add(new Field(m, readAverageGain(m)));
                 break;     // stop at the first search dir that yielded matches
             }
@@ -211,7 +225,7 @@ public class Lucid_Raw_Corrector implements PlugIn {
         if (cands.isEmpty()) return "  (none found)";
         StringBuilder sb = new StringBuilder();
         Field recent = cands.get(0);
-        sb.append("  most-recent: ").append(recent.folder.getName())
+        sb.append("  selected: ").append(recent.folder.getName())
           .append("  (").append(gainStr(recent.gain)).append(")");
         Field m = firstMatch(cands, dataGain);
         if (m != null)
@@ -232,11 +246,11 @@ public class Lucid_Raw_Corrector implements PlugIn {
         if (matchMode) {
             if (match != null) { chosen = match; scale = 1.0; }
             else {
-                chosen = cands.get(0);   // fall back to most-recent + rescale
+                chosen = cands.get(0);   // fall back to selected (top-sorted) + rescale
                 scale  = gainScale(dataGain, chosen.gain);
                 IJ.log("Lucid: no " + label + " capture within " + GAIN_TOL
                        + " dB of data gain " + gainStr(dataGain)
-                       + "; using most-recent (" + gainStr(chosen.gain) + ") rescaled x"
+                       + "; using selected (" + gainStr(chosen.gain) + ") rescaled x"
                        + String.format("%.4f", scale) + ".");
             }
         } else {
