@@ -1,0 +1,9 @@
+.claude*
+__pycache__*
+.vscode*
+.qodo*
+.pylint*
+.vsc*
+.spyder*
+.env*
+*.pyc

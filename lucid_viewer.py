@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QComboBox,
     QGroupBox, QGridLayout, QSpinBox, QFormLayout,
-    QSplitter, QMessageBox, QSlider, QCheckBox,
+    QSplitter, QMessageBox, QSlider, QCheckBox, QSizePolicy,
     QDialog, QProgressBar, QDialogButtonBox, QFrame,
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, QTimer, pyqtSignal
@@ -1706,7 +1706,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         # ── Sidebar ───────────────────────────────────────────────────────────
         sidebar = QWidget()
-        sidebar.setFixedWidth(230)
+        sidebar.setMinimumWidth(180)
         sb = QVBoxLayout(sidebar)
         sb.setContentsMargins(8, 8, 8, 8)
         sb.setSpacing(8)
@@ -1751,14 +1751,16 @@ class LucidViewer(ViewerMixin, QMainWindow):
         meta_box  = QGroupBox('File info')
         meta_grid = QGridLayout(meta_box)
         meta_grid.setSpacing(4)
+        meta_grid.setColumnStretch(0, 0)
+        meta_grid.setColumnStretch(1, 1)
 
         self._meta_vals = []
         for row, key in enumerate(['Folder:', 'File:', 'Format:', 'Frames:', 'FPS:', 'Size:', 'Acquired:', 'Notes:']):
             lbl = QLabel(key)
             lbl.setStyleSheet('font-weight: bold;')
+            lbl.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
             meta_grid.addWidget(lbl, row, 0)
             v = QLabel('—')
-            v.setWordWrap(True)
             self._meta_vals.append(v)
             meta_grid.addWidget(v, row, 1)
         sb.addWidget(meta_box)
@@ -1824,14 +1826,20 @@ class LucidViewer(ViewerMixin, QMainWindow):
             'Save current dark/white field selection to this file\'s sidecar JSON.\n'
             'On next open the same fields will be loaded automatically.')
         self.store_fields_btn.setEnabled(False)
-        corr_grid.addWidget(self.dark_chk,            0, 0, 1, 2)
-        corr_grid.addWidget(self.white_chk,           1, 0)
-        corr_grid.addWidget(self.white_combo,         1, 1)
-        corr_grid.addWidget(self._pca_n_lbl,          2, 0)
-        corr_grid.addWidget(self.pca_n_spin,          2, 1)
-        corr_grid.addWidget(self._pca_settings_btn,   3, 0, 1, 2)
-        corr_grid.addWidget(self.corr_status_lbl,     4, 0, 1, 2)
-        corr_grid.addWidget(self.store_fields_btn,    5, 0, 1, 2)
+        self._dark_field_info_lbl = QLabel('—')
+        self._dark_field_info_lbl.setStyleSheet('color: #888; font-size: 10px;')
+        self._white_field_info_lbl = QLabel('—')
+        self._white_field_info_lbl.setStyleSheet('color: #888; font-size: 10px;')
+        corr_grid.addWidget(self.dark_chk,               0, 0, 1, 2)
+        corr_grid.addWidget(self.white_chk,              1, 0)
+        corr_grid.addWidget(self.white_combo,            1, 1)
+        corr_grid.addWidget(self._dark_field_info_lbl,   2, 0)
+        corr_grid.addWidget(self._white_field_info_lbl,  2, 1)
+        corr_grid.addWidget(self._pca_n_lbl,             3, 0)
+        corr_grid.addWidget(self.pca_n_spin,             3, 1)
+        corr_grid.addWidget(self._pca_settings_btn,      4, 0, 1, 2)
+        corr_grid.addWidget(self.corr_status_lbl,        5, 0, 1, 2)
+        corr_grid.addWidget(self.store_fields_btn,       6, 0, 1, 2)
         sb.addWidget(corr_box)
 
         sb.addStretch()
@@ -1839,6 +1847,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         # ── pyqtgraph canvas ──────────────────────────────────────────────────
         right = QWidget()
+        right.setMinimumWidth(300)
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(4)
@@ -2057,7 +2066,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         acq   = self._sidecar_acq_time or '—'
         notes = self._sidecar_notes    or '—'
-        for lbl, val in zip(self._meta_vals, [
+        _meta_keys = ['Folder', 'File', 'Format', 'Frames', 'FPS', 'Size', 'Acquired', 'Notes']
+        _meta_data = [
             os.path.basename(os.path.dirname(path)),
             os.path.basename(path),
             fmt if ext == '.raw' else ext.lstrip('.').upper(),
@@ -2066,8 +2076,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
             f'{file_size_mb:.1f} MB',
             acq,
             notes,
-        ]):
+        ]
+        for lbl, key, val in zip(self._meta_vals, _meta_keys, _meta_data):
             lbl.setText(val)
+            lbl.setToolTip(f'{key}: {val}')
 
         if ext == '.raw':
             bpf = getattr(reader, 'bpf', None)
@@ -2499,9 +2511,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._dark_field       = None
             self._dark_field_gain  = None
             self._dark_field_error = None
-            self.dark_chk.setToolTip(
-                'Finds closest dark_field_* folder by timestamp\n'
-                'and averages all frames as the dark reference.')
+            self._set_dark_field_info()
             self._refresh_corr_status()
             self._refresh_current_frame()
             self._auto_levels()
@@ -2525,13 +2535,51 @@ class LucidViewer(ViewerMixin, QMainWindow):
             return
         self._dark_field_gain  = self._read_average_gain(folder)
         self._dark_field_error = self._check_field_shape(self._dark_field, 'dark')
-        self.dark_chk.setToolTip(
-            f'Using: {os.path.basename(folder)}\n'
-            f'Path: {folder}\n\n'
-            'Averages all frames as the dark reference.')
+        self._set_dark_field_info(folder, self._dark_field_error or '')
         self._refresh_corr_status()
         self._refresh_current_frame()
         self._auto_levels()
+
+    def _set_dark_field_info(self, folder=None, error=''):
+        lbl = self._dark_field_info_lbl
+        if folder is None:
+            lbl.setText('—')
+            lbl.setStyleSheet('color: #888; font-size: 10px;')
+            lbl.setToolTip('')
+            return
+        basename = os.path.basename(folder)
+        if error:
+            lbl.setText(f'⚠ {basename}')
+            lbl.setStyleSheet('color: #cc8800; font-size: 10px;')
+        else:
+            lbl.setText(f'✓ {basename}')
+            lbl.setStyleSheet('color: #66cc66; font-size: 10px;')
+        tip = f'{basename}\nPath: {folder}'
+        if error:
+            tip += f'\n\n⚠ {error}'
+        else:
+            tip += '\n\nAverages all frames in this folder as the dark reference.'
+        lbl.setToolTip(tip)
+
+    def _set_white_field_info(self, folder=None, extra=''):
+        lbl = self._white_field_info_lbl
+        if folder is None:
+            lbl.setText('—')
+            lbl.setStyleSheet('color: #888; font-size: 10px;')
+            lbl.setToolTip('')
+            return
+        basename = os.path.basename(folder)
+        is_error = extra and not extra.startswith('master:')
+        if is_error:
+            lbl.setText(f'⚠ {basename}')
+            lbl.setStyleSheet('color: #cc8800; font-size: 10px;')
+        else:
+            lbl.setText(f'✓ {basename}')
+            lbl.setStyleSheet('color: #66cc66; font-size: 10px;')
+        tip = f'{basename}\nPath: {folder}'
+        if extra:
+            tip += f'\n\n{extra}' if is_error else f'\n{extra}'
+        lbl.setToolTip(tip)
 
     def _on_white_chk_toggled(self, checked):
         if checked:
@@ -2557,6 +2605,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._pca_n_lbl.setVisible(False)
             self.pca_n_spin.setVisible(False)
             self._pca_settings_btn.setVisible(False)
+            self._set_white_field_info()
             self._refresh_corr_status()
             self._refresh_current_frame()
             self._auto_levels()
@@ -2591,10 +2640,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._pca_components        = None
             self._pca_mean_low          = None
             self._pca_components_low    = None
-            self.white_combo.setToolTip(
-                f'Using: {os.path.basename(folder)}\n'
-                f'Path: {folder}\n\n'
-                'Flat field: divides each frame by the averaged white-field frames.')
+            self._set_white_field_info(folder, self._white_field_error or '')
             self._refresh_corr_status()
             self._refresh_current_frame()
             self._auto_levels()
@@ -2810,10 +2856,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self.corr_status_lbl.setText(
                         f'PCA ✓  {n_stored} comp cached, top 3: {ev_str}{blur_tag}')
                     self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
-                    self.white_chk.setToolTip(
-                        f'Using: {os.path.basename(folder)}\n'
-                        f'Path: {folder}\n\n'
-                        'PCA removal: subtracts top N PCA components of the background.')
+                    self._set_white_field_info(folder)
                     self._refresh_current_frame()
                     return
             except Exception as exc:
@@ -2869,10 +2912,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.corr_status_lbl.setText(f'PCA ✓  {n_stored} comp, top 3: {ev_str}{blur_tag}')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
         self.statusBar().clearMessage()
-        self.white_chk.setToolTip(
-            f'Using: {os.path.basename(folder)}\n'
-            f'Path: {folder}\n\n'
-            'PCA removal: subtracts top N PCA components of the background.')
+        self._set_white_field_info(folder)
         self._refresh_current_frame()
         self._auto_levels()
 
@@ -3019,10 +3059,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
             f'PCA ✓  universal {n} comp (cell-adapted){blur_tag}')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
         self.statusBar().clearMessage()
-        self.white_chk.setToolTip(
-            f'Using: {os.path.basename(folder)}  [master: {os.path.basename(self._pca_master_folder)}]\n'
-            f'Path: {folder}\n\n'
-            'Universal PCA: master basis adapted per-cell via element-wise scaling.')
+        master_name = os.path.basename(self._pca_master_folder) if self._pca_master_folder else ''
+        extra_tip = f'master: {master_name}' if master_name else ''
+        self._set_white_field_info(folder, extra_tip)
         self._refresh_current_frame()
         self._auto_levels()
 
@@ -3281,20 +3320,15 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _reload_fields(self):
         """Reload whichever field references are currently selected for the new file."""
-        _dark_tip_default = ('Finds closest dark_field_* folder by timestamp\n'
-                             'and averages all frames as the dark reference.')
         if self.dark_chk.isChecked():
             folder = self._find_field_folder('dark_field')
             self._dark_field       = self._load_field_frame(folder) if folder else None
             self._dark_field_gain  = self._read_average_gain(folder) if folder else None
             self._dark_field_error = self._check_field_shape(self._dark_field, 'dark')
             if folder and self._dark_field is not None:
-                self.dark_chk.setToolTip(
-                    f'Using: {os.path.basename(folder)}\n'
-                    f'Path: {folder}\n\n'
-                    'Averages all frames as the dark reference.')
+                self._set_dark_field_info(folder, self._dark_field_error or '')
             else:
-                self.dark_chk.setToolTip(_dark_tip_default)
+                self._set_dark_field_info()
 
         mode_idx = (self.white_combo.currentIndex() + 1) if self.white_chk.isChecked() else 0
         if mode_idx == 1:
@@ -3304,10 +3338,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._white_field_error = self._check_field_shape(self._white_field, 'white')
             self._white_mode        = 'flat'
             if folder and self._white_field is not None:
-                self.white_chk.setToolTip(
-                    f'Using: {os.path.basename(folder)}\n'
-                    f'Path: {folder}\n\n'
-                    'Flat field: divides each frame by the averaged white-field frames.')
+                self._set_white_field_info(folder, self._white_field_error or '')
         elif mode_idx == 2:
             self._compute_or_load_pca()  # tooltip updated inside _compute_or_load_pca/_on_pca_computed
         else:
@@ -3329,11 +3360,6 @@ class LucidViewer(ViewerMixin, QMainWindow):
             return f'{name} field is {fw}×{fh} but data is {rw}×{rh}'
         return None
 
-    _DARK_CHK_TIP = ('Finds most recent dark_field_* folder in parent directory\n'
-                     'and averages all frames as the dark reference.')
-    _WHITE_CHK_TIP = ('Finds most recent white_field_* folder in parent directory\n'
-                      'and averages all frames as the white reference.')
-
     def _refresh_corr_status(self):
         parts = []
         has_error = False
@@ -3341,13 +3367,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if self._dark_field is not None:
             if self._dark_field_error:
                 parts.append('Dark ✗')
-                self.dark_chk.setToolTip(f'{self._DARK_CHK_TIP}\n\n⚠ {self._dark_field_error}')
                 has_error = True
-            else:
-                parts.append('Dark ✓')
-                self.dark_chk.setToolTip(self._DARK_CHK_TIP)
-        else:
-            self.dark_chk.setToolTip(self._DARK_CHK_TIP)
 
         if self._white_mode == 'flat' and self._white_field is not None:
             if self._white_field_error:
