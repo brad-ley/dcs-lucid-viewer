@@ -1177,6 +1177,63 @@ class CellAdaptWorker(QThread):
             self.adapt_done.emit(None, None, None, None)
 
 
+class FieldLoadWorker(QThread):
+    """Load a single field correction frame from a folder in a background thread.
+    Prefers files with 'mean' in the name (precomputed by acquisition software)."""
+    field_done = pyqtSignal(object, str, str)   # (ndarray|None, folder, error)
+
+    def __init__(self, folder, fmt, w, h, parent=None):
+        super().__init__(parent)
+        self._folder = folder
+        self._fmt    = fmt
+        self._w      = w
+        self._h      = h
+
+    def run(self):
+        try:
+            frame = self._load_frame()
+            if frame is None:
+                self.field_done.emit(None, self._folder, 'no file found')
+            else:
+                self.field_done.emit(frame, self._folder, '')
+        except Exception as exc:
+            self.field_done.emit(None, self._folder, str(exc))
+
+    def _load_frame(self):
+        try:
+            all_files = sorted(os.listdir(self._folder))
+        except OSError:
+            return None
+        raw_files  = [f for f in all_files if os.path.splitext(f)[1].lower() == '.raw']
+        tiff_files = [f for f in all_files
+                      if os.path.splitext(f)[1].lower() in ('.tiff', '.tif')]
+        files = raw_files if raw_files else tiff_files
+        if not files:
+            return None
+        mean_files = [f for f in files if 'mean' in f.lower()]
+        target = mean_files[0] if mean_files else files[0]
+        fpath  = os.path.join(self._folder, target)
+        ext    = os.path.splitext(target)[1].lower()
+        try:
+            if ext == '.raw':
+                sidecar, _ = _load_sidecar(fpath)
+                fmt = (sidecar.get('pixel_format') or sidecar.get('pixelformat')
+                       or sidecar.get('PixelFormat') or self._fmt)
+                w = int(sidecar.get('width',  self._w))
+                h = int(sidecar.get('height', self._h))
+                r = RawReader(fpath, fmt, w, h)
+                frame = r[0].astype(np.float32)
+                r.close()
+                return frame
+            elif ext in ('.tiff', '.tif'):
+                import tifffile
+                data = tifffile.imread(fpath)
+                return data.astype(np.float32) if data.ndim == 2 else data[0].astype(np.float32)
+        except Exception as e:
+            print(f'[field] error loading {target}: {e}')
+            return None
+
+
 TIFF_COMPRESSIONS = ['None', 'LZW', 'Deflate', 'ZSTD']
 
 
@@ -1644,6 +1701,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_master_mean_low       = None   # (H*W,) float32 master blurred mean
         self._pca_master_components_low = None   # (n, H*W) float32 master blurred eigenvectors
         self._cell_adapt_worker         = None   # CellAdaptWorker while adapting
+        self._dark_field_worker         = None   # FieldLoadWorker for dark field
+        self._white_flat_worker         = None   # FieldLoadWorker for flat white field
         self._stored_field_refs = {}     # field_references loaded from sidecar
         self._play_timer        = None   # QTimer driving playback
         self._play_start_wall   = 0.0    # time.monotonic() when play started
@@ -2561,19 +2620,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self.dark_chk.setChecked(False)
             self.dark_chk.blockSignals(False)
             return
-        self._dark_field = self._load_field_frame(folder)
-        if self._dark_field is None:
-            self.corr_status_lbl.setText('Dark field: no frames loaded')
-            self.dark_chk.blockSignals(True)
-            self.dark_chk.setChecked(False)
-            self.dark_chk.blockSignals(False)
-            return
-        self._dark_field_gain  = self._read_average_gain(folder)
-        self._dark_field_error = self._check_field_shape(self._dark_field, 'dark')
-        self._set_dark_field_info(folder, self._dark_field_error or '')
-        self._refresh_corr_status()
-        self._refresh_current_frame()
-        self._auto_levels()
+        self._dark_field       = None
+        self._dark_field_gain  = None
+        self._dark_field_error = None
+        self._start_dark_field_worker(folder)
 
     def _set_dark_field_info(self, folder=None, error=''):
         lbl = self._dark_field_info_lbl
@@ -2613,6 +2663,73 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if extra:
             tip += f'\n\n{extra}' if is_error else f'\n{extra}'
         lbl.setToolTip(tip)
+
+    # ── async field loaders ───────────────────────────────────────────────────
+
+    def _start_dark_field_worker(self, folder):
+        if self._dark_field_worker is not None:
+            try:
+                self._dark_field_worker.field_done.disconnect()
+            except TypeError:
+                pass
+        fmt    = self.fmt_combo.currentText()
+        w, h   = self.w_spin.value(), self.h_spin.value()
+        worker = FieldLoadWorker(folder, fmt, w, h)
+        worker.field_done.connect(self._on_dark_field_loaded)
+        self._dark_field_worker = worker
+        self.corr_status_lbl.setText('Loading dark field…')
+        worker.start()
+
+    def _start_white_flat_worker(self, folder):
+        if self._white_flat_worker is not None:
+            try:
+                self._white_flat_worker.field_done.disconnect()
+            except TypeError:
+                pass
+        fmt    = self.fmt_combo.currentText()
+        w, h   = self.w_spin.value(), self.h_spin.value()
+        worker = FieldLoadWorker(folder, fmt, w, h)
+        worker.field_done.connect(self._on_white_flat_loaded)
+        self._white_flat_worker = worker
+        self.corr_status_lbl.setText('Loading white field…')
+        worker.start()
+
+    def _on_dark_field_loaded(self, data, folder, error):
+        if data is None:
+            self.corr_status_lbl.setText(f'Dark field: {error}')
+            self.dark_chk.blockSignals(True)
+            self.dark_chk.setChecked(False)
+            self.dark_chk.blockSignals(False)
+            self._set_dark_field_info()
+            return
+        self._dark_field       = data
+        self._dark_field_gain  = self._read_average_gain(folder)
+        self._dark_field_error = self._check_field_shape(data, 'dark')
+        self._set_dark_field_info(folder, self._dark_field_error or '')
+        self._refresh_corr_status()
+        self._refresh_current_frame()
+        self._auto_levels()
+
+    def _on_white_flat_loaded(self, data, folder, error):
+        if data is None:
+            self.corr_status_lbl.setText(f'White field: {error}')
+            self.white_chk.blockSignals(True)
+            self.white_chk.setChecked(False)
+            self.white_chk.blockSignals(False)
+            self._set_white_field_info()
+            return
+        self._white_field       = data
+        self._white_field_gain  = self._read_average_gain(folder)
+        self._white_field_error = self._check_field_shape(data, 'white')
+        self._white_mode         = 'flat'
+        self._pca_mean           = None
+        self._pca_components     = None
+        self._pca_mean_low       = None
+        self._pca_components_low = None
+        self._set_white_field_info(folder, self._white_field_error or '')
+        self._refresh_corr_status()
+        self._refresh_current_frame()
+        self._auto_levels()
 
     def _on_white_chk_toggled(self, checked):
         if checked:
@@ -2659,24 +2776,15 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 self.white_chk.setChecked(False)
                 self.white_chk.blockSignals(False)
                 return
-            self._white_field = self._load_field_frame(folder)
-            if self._white_field is None:
-                self.corr_status_lbl.setText('White field: no frames loaded')
-                self.white_chk.blockSignals(True)
-                self.white_chk.setChecked(False)
-                self.white_chk.blockSignals(False)
-                return
-            self._white_field_gain  = self._read_average_gain(folder)
-            self._white_field_error = self._check_field_shape(self._white_field, 'white')
-            self._white_mode            = 'flat'
-            self._pca_mean              = None
-            self._pca_components        = None
-            self._pca_mean_low          = None
-            self._pca_components_low    = None
-            self._set_white_field_info(folder, self._white_field_error or '')
-            self._refresh_corr_status()
-            self._refresh_current_frame()
-            self._auto_levels()
+            self._white_field       = None
+            self._white_field_gain  = None
+            self._white_field_error = None
+            self._white_mode        = 'flat'
+            self._pca_mean          = None
+            self._pca_components    = None
+            self._pca_mean_low      = None
+            self._pca_components_low = None
+            self._start_white_flat_worker(folder)
 
         elif index == 2:
             self._pca_n_lbl.setVisible(True)
@@ -3355,25 +3463,32 @@ class LucidViewer(ViewerMixin, QMainWindow):
         """Reload whichever field references are currently selected for the new file."""
         if self.dark_chk.isChecked():
             folder = self._find_field_folder('dark_field')
-            self._dark_field       = self._load_field_frame(folder) if folder else None
-            self._dark_field_gain  = self._read_average_gain(folder) if folder else None
-            self._dark_field_error = self._check_field_shape(self._dark_field, 'dark')
-            if folder and self._dark_field is not None:
-                self._set_dark_field_info(folder, self._dark_field_error or '')
+            if folder:
+                self._dark_field       = None
+                self._dark_field_gain  = None
+                self._dark_field_error = None
+                self._start_dark_field_worker(folder)
             else:
+                self._dark_field       = None
+                self._dark_field_gain  = None
+                self._dark_field_error = None
                 self._set_dark_field_info()
 
         mode_idx = (self.white_combo.currentIndex() + 1) if self.white_chk.isChecked() else 0
         if mode_idx == 1:
             folder = self._find_field_folder('white_field')
-            self._white_field       = self._load_field_frame(folder) if folder else None
-            self._white_field_gain  = self._read_average_gain(folder) if folder else None
-            self._white_field_error = self._check_field_shape(self._white_field, 'white')
-            self._white_mode        = 'flat'
-            if folder and self._white_field is not None:
-                self._set_white_field_info(folder, self._white_field_error or '')
+            if folder:
+                self._white_field       = None
+                self._white_field_gain  = None
+                self._white_field_error = None
+                self._white_mode        = 'flat'
+                self._start_white_flat_worker(folder)
+            else:
+                self._white_field       = None
+                self._white_field_error = None
+                self._set_white_field_info()
         elif mode_idx == 2:
-            self._compute_or_load_pca()  # tooltip updated inside _compute_or_load_pca/_on_pca_computed
+            self._compute_or_load_pca()
         else:
             self._white_mode        = 'none'
             self._white_field       = None
