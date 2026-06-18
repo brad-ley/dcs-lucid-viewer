@@ -576,14 +576,14 @@ def _auto_pca_n(explained: np.ndarray) -> int:
     return max(1, len(explained))
 
 
-def _compute_pca_from_frames(frames, n_components=20, progress_cb=None):
+def _compute_pca_from_frames(frames, n_components=20, blur_sigma=0.0, progress_cb=None):
     """
     PCA on a list of (H, W) float32 frames using the frame-space covariance
     trick (K << N).  All heavy work is a small number of BLAS sgemm calls.
-    Returns (mean, components, explained_variance_ratio).
-      mean:       (H*W,) float32
-      components: (n_out, H*W) float32
-      explained:  (n_out,) float32
+    Returns (mean, components, explained, mean_low, components_low).
+      mean/components/explained: full-resolution PCA (H*W,) float32
+      mean_low/components_low:   Gaussian-blurred PCA for dual-resolution
+                                 projection (None when blur_sigma <= 0)
     """
     def _prog(msg):
         if progress_cb:
@@ -631,7 +631,30 @@ def _compute_pca_from_frames(frames, n_components=20, progress_cb=None):
 
     total_var = float(max(eigenvalues[eigenvalues > 0].sum(), 1e-12))
     explained = (eigenvalues[:n_components] / total_var).astype(np.float32)
-    return mu32, components, explained
+
+    if blur_sigma > 0.0:
+        from scipy.ndimage import gaussian_filter
+        _prog('PCA (blur): blurring and stacking frames…')
+        X_low = np.empty((K, N), dtype=np.float32)
+        for i, f in enumerate(frames):
+            X_low[i] = gaussian_filter(f, sigma=float(blur_sigma)).ravel()
+        mu_low = X_low.mean(axis=0)
+        X_low -= mu_low
+        _prog('PCA (blur): frame covariance…')
+        C_low = X_low.dot(X_low.T).astype(np.float64) / max(K - 1, 1)
+        _prog('PCA (blur): eigendecomposition…')
+        ev_low, evec_low = np.linalg.eigh(C_low)
+        evec_low = evec_low[:, np.argsort(ev_low)[::-1]]
+        _prog(f'PCA (blur): projecting {n_components} components…')
+        E_low = np.ascontiguousarray(
+            evec_low[:, :n_components].T.astype(np.float32))
+        V_low = E_low.dot(X_low)
+        norms_low = np.linalg.norm(V_low, axis=1, keepdims=True)
+        np.maximum(norms_low, 1e-10, out=norms_low)
+        V_low /= norms_low
+        return mu32, components, explained, mu_low, V_low
+
+    return mu32, components, explained, None, None
 
 
 # ── TIFF export worker ────────────────────────────────────────────────────────
@@ -647,29 +670,35 @@ class TiffExportWorker(QThread):
                  white_field, white_field_gain,
                  gains, desc, bigtiff, compression='None', pixel_bits=16,
                  timestamps=None, ts_unit='s', trigger_t0=None, imagej=False,
-                 pca_mean=None, pca_components=None, pca_n_components=5):
+                 pca_mean=None, pca_components=None, pca_n_components=5,
+                 pca_mean_low=None, pca_components_low=None,
+                 pca_blur_enabled=False, pca_blur_sigma=400):
         super().__init__()
-        self._out_path         = out_path
-        self._reader           = reader
-        self._cache            = dict(cache)
-        self._n                = n
-        self._dark_field       = dark_field
-        self._dark_field_gain  = dark_field_gain
-        self._white_field      = white_field
-        self._white_field_gain = white_field_gain
-        self._gains            = gains
-        self._desc             = desc
-        self._bigtiff          = bigtiff
-        self._compression      = compression
-        self._pixel_bits       = pixel_bits
-        self._timestamps       = timestamps
-        self._ts_unit          = ts_unit
-        self._trigger_t0       = trigger_t0
-        self._imagej           = imagej
-        self._pca_mean         = pca_mean
-        self._pca_components   = pca_components
-        self._pca_n_components = pca_n_components
-        self._cancelled        = False
+        self._out_path            = out_path
+        self._reader              = reader
+        self._cache               = dict(cache)
+        self._n                   = n
+        self._dark_field          = dark_field
+        self._dark_field_gain     = dark_field_gain
+        self._white_field         = white_field
+        self._white_field_gain    = white_field_gain
+        self._gains               = gains
+        self._desc                = desc
+        self._bigtiff             = bigtiff
+        self._compression         = compression
+        self._pixel_bits          = pixel_bits
+        self._timestamps          = timestamps
+        self._ts_unit             = ts_unit
+        self._trigger_t0          = trigger_t0
+        self._imagej              = imagej
+        self._pca_mean            = pca_mean
+        self._pca_components      = pca_components
+        self._pca_n_components    = pca_n_components
+        self._pca_mean_low        = pca_mean_low
+        self._pca_components_low  = pca_components_low
+        self._pca_blur_enabled    = pca_blur_enabled
+        self._pca_blur_sigma      = pca_blur_sigma
+        self._cancelled           = False
 
     def cancel(self):
         self._cancelled = True
@@ -686,10 +715,20 @@ class TiffExportWorker(QThread):
                 dark = dark * np.float32(10 ** ((data_gain - self._dark_field_gain) / 20.0))
             if dark is not None:
                 f = f - dark
-            d_c        = f.ravel() - mu
-            coeffs     = comp[:n] @ d_c
-            bg         = (mu + comp[:n].T @ coeffs).reshape(frame.shape)
-            bg         = np.where(bg >= np.float32(1.0), bg, np.float32(1.0))
+            if (self._pca_blur_enabled
+                    and self._pca_mean_low is not None
+                    and self._pca_components_low is not None):
+                from scipy.ndimage import gaussian_filter
+                n_low  = min(n, self._pca_components_low.shape[0])
+                f_low  = gaussian_filter(f, sigma=float(self._pca_blur_sigma)).ravel()
+                d_low  = f_low - self._pca_mean_low
+                coeffs = self._pca_components_low[:n_low] @ d_low
+                bg     = (mu + comp[:n_low].T @ coeffs).reshape(frame.shape)
+            else:
+                d_c    = f.ravel() - mu
+                coeffs = comp[:n] @ d_c
+                bg     = (mu + comp[:n].T @ coeffs).reshape(frame.shape)
+            bg = np.where(bg >= np.float32(1.0), bg, np.float32(1.0))
             return (f / bg).astype(np.float32)
         return _field_correct_float(
             frame, self._dark_field, self._white_field,
@@ -862,25 +901,31 @@ class GifExportWorker(QThread):
                  dark_field=None, dark_field_gain=None,
                  white_field=None, white_field_gain=None,
                  pca_mean=None, pca_components=None, pca_n_components=5,
+                 pca_mean_low=None, pca_components_low=None,
+                 pca_blur_enabled=False, pca_blur_sigma=400,
                  gains=None, parent=None):
         super().__init__(parent)
-        self._out_path         = out_path
-        self._reader           = reader
-        self._cache            = dict(cache)
-        self._n                = n
-        self._step             = step
-        self._scale            = scale
-        self._fps              = fps
-        self._levels           = levels
-        self._dark_field       = dark_field
-        self._dark_field_gain  = dark_field_gain
-        self._white_field      = white_field
-        self._white_field_gain = white_field_gain
-        self._pca_mean         = pca_mean
-        self._pca_components   = pca_components
-        self._pca_n_components = pca_n_components
-        self._gains            = gains
-        self._cancelled        = False
+        self._out_path            = out_path
+        self._reader              = reader
+        self._cache               = dict(cache)
+        self._n                   = n
+        self._step                = step
+        self._scale               = scale
+        self._fps                 = fps
+        self._levels              = levels
+        self._dark_field          = dark_field
+        self._dark_field_gain     = dark_field_gain
+        self._white_field         = white_field
+        self._white_field_gain    = white_field_gain
+        self._pca_mean            = pca_mean
+        self._pca_components      = pca_components
+        self._pca_n_components    = pca_n_components
+        self._pca_mean_low        = pca_mean_low
+        self._pca_components_low  = pca_components_low
+        self._pca_blur_enabled    = pca_blur_enabled
+        self._pca_blur_sigma      = pca_blur_sigma
+        self._gains               = gains
+        self._cancelled           = False
 
     def cancel(self):
         self._cancelled = True
@@ -896,9 +941,19 @@ class GifExportWorker(QThread):
                 dark = dark * np.float32(10 ** ((data_gain - self._dark_field_gain) / 20.0))
             if dark is not None:
                 f = f - dark
-            d_c    = f.ravel() - mu
-            coeffs = comp[:n] @ d_c
-            bg     = (mu + comp[:n].T @ coeffs).reshape(frame.shape)
+            if (self._pca_blur_enabled
+                    and self._pca_mean_low is not None
+                    and self._pca_components_low is not None):
+                from scipy.ndimage import gaussian_filter
+                n_low  = min(n, self._pca_components_low.shape[0])
+                f_low  = gaussian_filter(f, sigma=float(self._pca_blur_sigma)).ravel()
+                d_low  = f_low - self._pca_mean_low
+                coeffs = self._pca_components_low[:n_low] @ d_low
+                bg     = (mu + comp[:n_low].T @ coeffs).reshape(frame.shape)
+            else:
+                d_c    = f.ravel() - mu
+                coeffs = comp[:n] @ d_c
+                bg     = (mu + comp[:n].T @ coeffs).reshape(frame.shape)
             bg_floor = np.maximum(mu.reshape(frame.shape) * np.float32(0.5), np.float32(1.0))
             np.maximum(bg, bg_floor, out=bg)
             return np.clip(f / bg, np.float32(0.0), np.float32(10.0))
@@ -956,17 +1011,18 @@ class GifExportWorker(QThread):
 
 
 class PcaComputeWorker(QThread):
-    pca_done     = pyqtSignal(object, object, object)  # mean, components, explained
+    pca_done     = pyqtSignal(object, object, object, object, object)  # mean, comp, expl, mu_low, comp_low
     pca_error    = pyqtSignal(str)
     pca_progress = pyqtSignal(str)                     # status message for UI
 
-    def __init__(self, folder, fmt, w, h, n_components=20, parent=None):
+    def __init__(self, folder, fmt, w, h, n_components=20, blur_sigma=0, parent=None):
         super().__init__(parent)
         self._folder       = folder
         self._fmt          = fmt
         self._w            = w
         self._h            = h
         self._n_components = n_components
+        self._blur_sigma   = blur_sigma
 
     def run(self):
         try:
@@ -979,10 +1035,10 @@ class PcaComputeWorker(QThread):
             mem_gb = K * H * W * 4 / 1e9
             self.pca_progress.emit(f'Computing PCA ({K} frames, ~{mem_gb:.1f} GB)…')
             n_store = min(20, K - 1)
-            mu, comp, expl = _compute_pca_from_frames(
-                frames, n_store,
+            mu, comp, expl, mu_low, comp_low = _compute_pca_from_frames(
+                frames, n_store, blur_sigma=self._blur_sigma,
                 progress_cb=lambda msg: self.pca_progress.emit(msg))
-            self.pca_done.emit(mu, comp, expl)
+            self.pca_done.emit(mu, comp, expl, mu_low, comp_low)
         except Exception as exc:
             self.pca_error.emit(str(exc))
 
@@ -1253,6 +1309,60 @@ class _GifExportDialog(QDialog):
         return self._fps_spin.value()
 
 
+class _PcaSettingsDialog(QDialog):
+    """PCA-specific settings: Gaussian-blur dual-resolution projection toggle."""
+
+    def __init__(self, blur_enabled, blur_sigma, parent=None, stylesheet=''):
+        super().__init__(parent)
+        self.setWindowTitle('PCA Settings')
+        self.setMinimumWidth(300)
+        if stylesheet:
+            self.setStyleSheet(stylesheet)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        self._blur_chk = QCheckBox('Enable Gaussian blur for temporal weight projection')
+        self._blur_chk.setChecked(blur_enabled)
+        layout.addWidget(self._blur_chk)
+
+        note = QLabel(
+            'Blurs each sample frame before projecting onto the low-resolution PCA\n'
+            'basis to estimate beam weights without sample contamination.\n'
+            'Requires a second PCA pass during white-field computation.')
+        note.setWordWrap(True)
+        note.setStyleSheet('color: #888; font-size: 10px;')
+        layout.addWidget(note)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self._sigma_spin = QSpinBox()
+        self._sigma_spin.setRange(10, 2000)
+        self._sigma_spin.setSingleStep(10)
+        self._sigma_spin.setSuffix(' px')
+        self._sigma_spin.setValue(blur_sigma)
+        self._sigma_spin.setEnabled(blur_enabled)
+        form.addRow('Blur sigma:', self._sigma_spin)
+        layout.addLayout(form)
+
+        self._blur_chk.toggled.connect(self._sigma_spin.setEnabled)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+        self.adjustSize()
+
+    @property
+    def blur_enabled(self):
+        return self._blur_chk.isChecked()
+
+    @property
+    def blur_sigma(self):
+        return self._sigma_spin.value()
+
+
 # ── Trigger-aware slider ──────────────────────────────────────────────────────
 
 class TriggerSlider(QSlider):
@@ -1397,6 +1507,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_folder        = None   # folder path used for cached PCA
         self._pca_n_components  = 5      # number of components to use for correction
         self._pca_worker        = None   # PcaComputeWorker while computing
+        self._pca_mean_low          = None  # (H*W,) float32 low-res PCA mean
+        self._pca_components_low    = None  # (n_stored, H*W) float32 low-res eigenvectors
+        self._pca_blur_enabled      = False # loaded from QSettings
+        self._pca_blur_sigma        = 400   # Gaussian blur sigma for low-res pass (px)
         self._stored_field_refs = {}     # field_references loaded from sidecar
         self._play_timer        = None   # QTimer driving playback
         self._play_start_wall   = 0.0    # time.monotonic() when play started
@@ -1576,6 +1690,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.pca_n_spin.setValue(5)
         self.pca_n_spin.setToolTip('Number of PCA components to subtract (1–20)')
         self.pca_n_spin.setVisible(False)
+        self._pca_settings_btn = QPushButton('PCA settings…')
+        self._pca_settings_btn.setToolTip(
+            'Configure Gaussian-blur dual-resolution projection settings.')
+        self._pca_settings_btn.setVisible(False)
         self.corr_status_lbl = QLabel('')
         self.corr_status_lbl.setWordWrap(True)
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
@@ -1587,10 +1705,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         corr_grid.addWidget(self.dark_chk,            0, 0, 1, 2)
         corr_grid.addWidget(self.white_chk,           1, 0)
         corr_grid.addWidget(self.white_combo,         1, 1)
-        corr_grid.addWidget(self._pca_n_lbl,         2, 0)
-        corr_grid.addWidget(self.pca_n_spin,         2, 1)
-        corr_grid.addWidget(self.corr_status_lbl,    3, 0, 1, 2)
-        corr_grid.addWidget(self.store_fields_btn,   4, 0, 1, 2)
+        corr_grid.addWidget(self._pca_n_lbl,          2, 0)
+        corr_grid.addWidget(self.pca_n_spin,          2, 1)
+        corr_grid.addWidget(self._pca_settings_btn,   3, 0, 1, 2)
+        corr_grid.addWidget(self.corr_status_lbl,     4, 0, 1, 2)
+        corr_grid.addWidget(self.store_fields_btn,    5, 0, 1, 2)
         sb.addWidget(corr_box)
 
         sb.addStretch()
@@ -1654,6 +1773,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.white_chk.toggled.connect(self._on_white_chk_toggled)
         self.white_combo.currentIndexChanged.connect(self._on_white_combo_changed)
         self.pca_n_spin.valueChanged.connect(self._on_pca_n_changed)
+        self._pca_settings_btn.clicked.connect(self._open_pca_settings)
         self.store_fields_btn.clicked.connect(self._store_fields_ref)
 
         self.play_btn.clicked.connect(self._toggle_play)
@@ -1774,9 +1894,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self.white_combo.setEnabled(False)
             self._white_field       = None
             self._white_field_gain  = None
-            self._white_mode        = 'none'
-            self._pca_mean          = None
-            self._pca_components    = None
+            self._white_mode            = 'none'
+            self._pca_mean              = None
+            self._pca_components        = None
+            self._pca_mean_low          = None
+            self._pca_components_low    = None
         else:
             self.white_chk.setEnabled(True)
             self.white_combo.setEnabled(True)
@@ -2305,10 +2427,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._white_field       = None
             self._white_field_gain  = None
             self._white_field_error = None
-            self._pca_mean          = None
-            self._pca_components    = None
+            self._pca_mean              = None
+            self._pca_components        = None
+            self._pca_mean_low          = None
+            self._pca_components_low    = None
             self._pca_n_lbl.setVisible(False)
             self.pca_n_spin.setVisible(False)
+            self._pca_settings_btn.setVisible(False)
             self._refresh_corr_status()
             self._refresh_current_frame()
             self._auto_levels()
@@ -2316,6 +2441,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         elif index == 1:
             self._pca_n_lbl.setVisible(False)
             self.pca_n_spin.setVisible(False)
+            self._pca_settings_btn.setVisible(False)
             if not self._path:
                 self.white_chk.blockSignals(True)
                 self.white_chk.setChecked(False)
@@ -2337,9 +2463,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 return
             self._white_field_gain  = self._read_average_gain(folder)
             self._white_field_error = self._check_field_shape(self._white_field, 'white')
-            self._white_mode        = 'flat'
-            self._pca_mean          = None
-            self._pca_components    = None
+            self._white_mode            = 'flat'
+            self._pca_mean              = None
+            self._pca_components        = None
+            self._pca_mean_low          = None
+            self._pca_components_low    = None
             self.white_combo.setToolTip(
                 f'Using: {os.path.basename(folder)}\n'
                 f'Path: {folder}\n\n'
@@ -2351,6 +2479,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         elif index == 2:
             self._pca_n_lbl.setVisible(True)
             self.pca_n_spin.setVisible(True)
+            self._pca_settings_btn.setVisible(True)
             if not self._path:
                 self.white_chk.blockSignals(True)
                 self.white_chk.setChecked(False)
@@ -2487,6 +2616,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         return frames
 
     def _pca_cache_path(self, folder, h, w):
+        if self._pca_blur_enabled:
+            return os.path.join(folder, f'pca_cache_{h}x{w}_blur{self._pca_blur_sigma}.npz')
         return os.path.join(folder, f'pca_cache_{h}x{w}.npz')
 
     def _pca_cache_valid(self, cache_path, folder):
@@ -2523,6 +2654,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 mean = data['mean']
                 comp = data['components']
                 if mean.shape[0] == h * w:
+                    if self._pca_blur_enabled:
+                        if 'mean_low' not in data or 'components_low' not in data:
+                            raise KeyError('cache lacks low-res arrays — recomputing with blur')
+                        self._pca_mean_low       = data['mean_low']
+                        self._pca_components_low = data['components_low']
+                    else:
+                        self._pca_mean_low       = None
+                        self._pca_components_low = None
                     self._pca_mean       = mean
                     self._pca_components = comp
                     self._pca_shape      = (h, w)
@@ -2540,8 +2679,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
                             f'{e*100:.1f}%' for e in explained[:min(3, n_stored)])
                     except Exception:
                         ev_str = '?'
+                    blur_tag = f'  [blur σ={self._pca_blur_sigma}px]' if self._pca_blur_enabled else ''
                     self.corr_status_lbl.setText(
-                        f'PCA ✓  {n_stored} comp cached, top 3: {ev_str}')
+                        f'PCA ✓  {n_stored} comp cached, top 3: {ev_str}{blur_tag}')
                     self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
                     self.white_chk.setToolTip(
                         f'Using: {os.path.basename(folder)}\n'
@@ -2561,25 +2701,33 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._pca_worker.pca_error.disconnect()
             self._pca_worker.pca_progress.disconnect()
             self._pca_worker.quit()
-        self._pca_worker = PcaComputeWorker(folder, fmt, w, h, parent=self)
+        self._pca_worker = PcaComputeWorker(
+            folder, fmt, w, h, blur_sigma=self._pca_blur_sigma if self._pca_blur_enabled else 0,
+            parent=self)
         self._pca_worker.pca_done.connect(
-            lambda mu, comp, expl, _cp=cache_path, _f=folder:
-                self._on_pca_computed(mu, comp, expl, _cp, _f)
+            lambda mu, comp, expl, mu_low, comp_low, _cp=cache_path, _f=folder:
+                self._on_pca_computed(mu, comp, expl, mu_low, comp_low, _cp, _f)
         )
         self._pca_worker.pca_error.connect(self._on_pca_error)
         self._pca_worker.pca_progress.connect(self._on_pca_progress)
         self._pca_worker.start()
 
-    def _on_pca_computed(self, mean, components, explained, cache_path, folder):
+    def _on_pca_computed(self, mean, components, explained, mean_low, components_low,
+                         cache_path, folder):
         if self._white_mode != 'pca':
             return
-        self._pca_mean       = mean
-        self._pca_components = components
-        self._pca_shape      = (self._reader.h, self._reader.w) if self._reader else None
-        self._pca_folder     = folder
+        self._pca_mean              = mean
+        self._pca_components        = components
+        self._pca_mean_low          = mean_low
+        self._pca_components_low    = components_low
+        self._pca_shape             = (self._reader.h, self._reader.w) if self._reader else None
+        self._pca_folder            = folder
         try:
-            np.savez_compressed(cache_path,
-                                mean=mean, components=components, explained=explained)
+            save_kw = dict(mean=mean, components=components, explained=explained)
+            if mean_low is not None and components_low is not None:
+                save_kw['mean_low']       = mean_low
+                save_kw['components_low'] = components_low
+            np.savez_compressed(cache_path, **save_kw)
         except Exception as exc:
             print(f'[pca] cache save error: {exc}')
         n_stored = components.shape[0]
@@ -2590,7 +2738,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_n_components = n_auto
         ev_str = ', '.join(
             f'{e*100:.1f}%' for e in explained[:min(3, n_stored)])
-        self.corr_status_lbl.setText(f'PCA ✓  {n_stored} comp, top 3: {ev_str}')
+        blur_tag = f'  [blur σ={self._pca_blur_sigma}px]' if self._pca_blur_enabled else ''
+        self.corr_status_lbl.setText(f'PCA ✓  {n_stored} comp, top 3: {ev_str}{blur_tag}')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
         self.statusBar().clearMessage()
         self.white_chk.setToolTip(
@@ -2604,6 +2753,25 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.corr_status_lbl.setText(msg)
         self.corr_status_lbl.setStyleSheet('color: #aaa; font-size: 10px;')
         self.statusBar().showMessage(msg)
+
+    def _open_pca_settings(self):
+        dlg = _PcaSettingsDialog(
+            self._pca_blur_enabled, self._pca_blur_sigma,
+            parent=self, stylesheet=self.styleSheet())
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_enabled = dlg.blur_enabled
+        new_sigma   = dlg.blur_sigma
+        changed = (new_enabled != self._pca_blur_enabled or
+                   (new_enabled and new_sigma != self._pca_blur_sigma))
+        self._pca_blur_enabled = new_enabled
+        self._pca_blur_sigma   = new_sigma
+        self._settings.setValue('pca/blur_enabled', self._pca_blur_enabled)
+        self._settings.setValue('pca/blur_sigma',   self._pca_blur_sigma)
+        if changed and self._white_mode == 'pca':
+            self._pca_mean_low       = None
+            self._pca_components_low = None
+            self._compute_or_load_pca()
 
     def _on_pca_error(self, msg):
         self.corr_status_lbl.setText(f'PCA error: {msg}')
@@ -2651,6 +2819,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self.white_chk.blockSignals(False)
                     self._pca_n_lbl.setVisible(combo_idx == 1)
                     self.pca_n_spin.setVisible(combo_idx == 1)
+                    self._pca_settings_btn.setVisible(combo_idx == 1)
 
     def _get_or_create_sidecar_path(self):
         """Return best sidecar path for writing.
@@ -2727,9 +2896,19 @@ class LucidViewer(ViewerMixin, QMainWindow):
         f = frame.astype(np.float32)
         if dark is not None:
             f = f - dark
-        d_c    = f.ravel() - mu
-        coeffs = comp[:n] @ d_c
-        bg     = (mu + comp[:n].T @ coeffs).reshape(frame.shape)
+        if (self._pca_blur_enabled
+                and self._pca_mean_low is not None
+                and self._pca_components_low is not None):
+            from scipy.ndimage import gaussian_filter
+            n_low  = min(n, self._pca_components_low.shape[0])
+            f_low  = gaussian_filter(f, sigma=float(self._pca_blur_sigma)).ravel()
+            d_low  = f_low - self._pca_mean_low
+            coeffs = self._pca_components_low[:n_low] @ d_low
+            bg     = (mu + comp[:n_low].T @ coeffs).reshape(frame.shape)
+        else:
+            d_c    = f.ravel() - mu
+            coeffs = comp[:n] @ d_c
+            bg     = (mu + comp[:n].T @ coeffs).reshape(frame.shape)
         # Floor bad/near-zero background pixels at half the per-pixel mean so that
         # pixels the PCA model reconstructs poorly don't cause extreme ratios.
         bg_floor = np.maximum(mu.reshape(frame.shape) * np.float32(0.5), np.float32(1.0))
@@ -3070,6 +3249,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         pca_mean  = self._pca_mean       if self._white_mode == 'pca' else None
         pca_comp  = self._pca_components if self._white_mode == 'pca' else None
+        pca_mean_low  = self._pca_mean_low       if self._white_mode == 'pca' else None
+        pca_comp_low  = self._pca_components_low if self._white_mode == 'pca' else None
         worker = TiffExportWorker(
             out_path, self._reader, self._cache, n,
             self._dark_field,  self._dark_field_gain,
@@ -3085,6 +3266,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
             pca_mean=pca_mean,
             pca_components=pca_comp,
             pca_n_components=self._pca_n_components,
+            pca_mean_low=pca_mean_low,
+            pca_components_low=pca_comp_low,
+            pca_blur_enabled=self._pca_blur_enabled,
+            pca_blur_sigma=self._pca_blur_sigma,
         )
         self._export_worker = worker
 
@@ -3156,8 +3341,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         levels = self.imview.getLevels()
 
-        pca_mean = self._pca_mean       if self._white_mode == 'pca' else None
-        pca_comp = self._pca_components if self._white_mode == 'pca' else None
+        pca_mean     = self._pca_mean            if self._white_mode == 'pca' else None
+        pca_comp     = self._pca_components      if self._white_mode == 'pca' else None
+        pca_mean_low = self._pca_mean_low        if self._white_mode == 'pca' else None
+        pca_comp_low = self._pca_components_low  if self._white_mode == 'pca' else None
         worker = GifExportWorker(
             out_path, self._reader, self._cache, n, step, scale, fps,
             levels,
@@ -3168,6 +3355,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
             pca_mean=pca_mean,
             pca_components=pca_comp,
             pca_n_components=self._pca_n_components,
+            pca_mean_low=pca_mean_low,
+            pca_components_low=pca_comp_low,
+            pca_blur_enabled=self._pca_blur_enabled,
+            pca_blur_sigma=self._pca_blur_sigma,
             gains=self._gains,
             parent=self,
         )
@@ -3264,6 +3455,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         s.setValue('white_chk_checked',   self.white_chk.isChecked())
         s.setValue('white_combo_index',   self.white_combo.currentIndex())
         s.setValue('pca_n_components',    self.pca_n_spin.value())
+        s.setValue('pca/blur_enabled',    self._pca_blur_enabled)
+        s.setValue('pca/blur_sigma',      self._pca_blur_sigma)
         s.setValue('export_compression',  self._export_compression)
         s.setValue('trigger_bit',         self._trigger_bit)
 
@@ -3311,9 +3504,12 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.white_combo.setCurrentIndex(combo_idx)
         self.white_combo.blockSignals(False)
         self.pca_n_spin.setValue(s.value('pca_n_components', 5, type=int))
+        self._pca_blur_enabled = s.value('pca/blur_enabled', False, type=bool)
+        self._pca_blur_sigma   = s.value('pca/blur_sigma',   400,   type=int)
         pca_visible = chk_checked and (combo_idx == 1)
         self._pca_n_lbl.setVisible(pca_visible)
         self.pca_n_spin.setVisible(pca_visible)
+        self._pca_settings_btn.setVisible(pca_visible)
         last = s.value('last_path', '')
         if last:
             self.statusBar().showMessage(f'Last file: {last}')

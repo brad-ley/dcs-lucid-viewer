@@ -104,6 +104,18 @@ QPushButton:pressed { background: #5c6062; }
 QPushButton:disabled { color: #666; }
 QComboBox, QSpinBox {
     background: #3c3f41; border: 1px solid #555; border-radius: 3px; padding: 2px 4px; }
+QSpinBox::up-button {
+    subcontrol-origin: border; subcontrol-position: top right;
+    width: 16px; border-left: 1px solid #555; border-bottom: 1px solid #555;
+    border-top-right-radius: 3px; background: #4c5052; }
+QSpinBox::up-button:hover   { background: #5c6062; }
+QSpinBox::up-button:pressed { background: #6c7072; }
+QSpinBox::down-button {
+    subcontrol-origin: border; subcontrol-position: bottom right;
+    width: 16px; border-left: 1px solid #555; border-top: 1px solid #555;
+    border-bottom-right-radius: 3px; background: #4c5052; }
+QSpinBox::down-button:hover   { background: #5c6062; }
+QSpinBox::down-button:pressed { background: #6c7072; }
 QMenuBar { background: #2b2b2b; }
 QMenuBar::item:selected { background: #3c3f41; }
 QMenu { background: #2b2b2b; border: 1px solid #555; }
