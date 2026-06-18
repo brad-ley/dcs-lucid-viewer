@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QComboBox,
     QGroupBox, QGridLayout, QSpinBox, QFormLayout,
     QSplitter, QMessageBox, QSlider, QCheckBox,
-    QDialog, QProgressBar, QDialogButtonBox, QSizePolicy,
+    QDialog, QProgressBar, QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon
@@ -568,15 +568,19 @@ def _field_correct_float(frame, dark, white,
     return out.astype(np.float32)
 
 
-def _compute_pca_from_frames(frames, n_components=20):
+def _compute_pca_from_frames(frames, n_components=20, progress_cb=None):
     """
     PCA on a list of (H, W) float32 frames using the frame-space covariance
-    trick (avoids the large N×N pixel-space matrix when K << N).
+    trick (K << N).  All heavy work is a small number of BLAS sgemm calls.
     Returns (mean, components, explained_variance_ratio).
       mean:       (H*W,) float32
       components: (n_out, H*W) float32
       explained:  (n_out,) float32
     """
+    def _prog(msg):
+        if progress_cb:
+            progress_cb(msg)
+
     K = len(frames)
     if K < 2:
         raise ValueError('PCA requires at least 2 white-field frames.')
@@ -584,35 +588,38 @@ def _compute_pca_from_frames(frames, n_components=20):
     N = H * W
     n_components = min(n_components, K - 1)
 
-    # Incremental mean
-    mu = np.zeros(N, dtype=np.float64)
-    for f in frames:
-        mu += f.ravel().astype(np.float64)
-    mu /= K
-    mu32 = mu.astype(np.float32)
-
-    # Centered frame matrix (K, N) float32
-    X_c = np.empty((K, N), dtype=np.float32)
+    # Stack frames into one (K, N) array — single allocation, no per-frame copies
+    _prog(f'PCA: stacking {K} frames…')
+    X = np.empty((K, N), dtype=np.float32)
     for i, f in enumerate(frames):
-        np.subtract(f.ravel(), mu32, out=X_c[i])
+        X[i] = f.ravel()
 
-    # Frame-space covariance C = X_c @ X_c.T / (K-1)
-    # float32 matmul then cast to float64 for stable eigh
-    C = (X_c @ X_c.T).astype(np.float64) / max(K - 1, 1)
+    # Mean and centering in-place (avoids a second 2 GB alloc)
+    _prog('PCA: centering…')
+    mu32 = X.mean(axis=0)          # (N,) float32, one BLAS call
+    X   -= mu32                    # in-place: no extra copy
 
+    # Frame-space covariance (K, K) — cost: K² × N, one sgemm
+    _prog('PCA: computing frame covariance…')
+    C = X.dot(X.T).astype(np.float64) / max(K - 1, 1)
+
+    _prog('PCA: eigendecomposition…')
     eigenvalues, eigenvectors = np.linalg.eigh(C)  # ascending
-    order = np.argsort(eigenvalues)[::-1]
-    eigenvalues = eigenvalues[order]
-    eigenvectors = eigenvectors[:, order]  # (K, K)
+    order        = np.argsort(eigenvalues)[::-1]
+    eigenvalues  = eigenvalues[order]
+    eigenvectors = eigenvectors[:, order]           # (K, K)
 
-    # Pixel-space components: v_i = X_c.T @ e_i / ||X_c.T @ e_i||
-    components = np.empty((n_components, N), dtype=np.float32)
-    for i in range(n_components):
-        v = X_c.T @ eigenvectors[:, i].astype(np.float32)  # (N,)
-        norm = float(np.linalg.norm(v))
-        if norm > 1e-10:
-            v /= norm
-        components[i] = v
+    # Pixel-space components — ONE sgemm: (n_comp, K) @ (K, N) → (n_comp, N)
+    _prog(f'PCA: projecting {n_components} components…')
+    evecs = np.ascontiguousarray(
+        eigenvectors[:, :n_components].T.astype(np.float32))  # (n_comp, K)
+    V = evecs.dot(X)                                           # (n_comp, N)
+
+    # Normalise rows
+    norms = np.linalg.norm(V, axis=1, keepdims=True)
+    np.maximum(norms, 1e-10, out=norms)
+    V /= norms
+    components = V                                             # (n_comp, N) float32
 
     total_var = float(max(eigenvalues[eigenvalues > 0].sum(), 1e-12))
     explained = (eigenvalues[:n_components] / total_var).astype(np.float32)
@@ -838,20 +845,76 @@ class TiffExportWorker(QThread):
 
 
 class PcaComputeWorker(QThread):
-    pca_done  = pyqtSignal(object, object, object)  # mean, components, explained
-    pca_error = pyqtSignal(str)
+    pca_done     = pyqtSignal(object, object, object)  # mean, components, explained
+    pca_error    = pyqtSignal(str)
+    pca_progress = pyqtSignal(str)                     # status message for UI
 
-    def __init__(self, frames, n_components=20, parent=None):
+    def __init__(self, folder, fmt, w, h, n_components=20, parent=None):
         super().__init__(parent)
-        self._frames       = frames
+        self._folder       = folder
+        self._fmt          = fmt
+        self._w            = w
+        self._h            = h
         self._n_components = n_components
 
     def run(self):
         try:
-            mu, comp, expl = _compute_pca_from_frames(self._frames, self._n_components)
+            frames = self._load_frames()
+            if len(frames) < 2:
+                self.pca_error.emit(f'Need ≥2 white-field frames, found {len(frames)}')
+                return
+            K = len(frames)
+            H, W = frames[0].shape
+            mem_gb = K * H * W * 4 / 1e9
+            self.pca_progress.emit(f'Computing PCA ({K} frames, ~{mem_gb:.1f} GB)…')
+            n_store = min(20, K - 1)
+            mu, comp, expl = _compute_pca_from_frames(
+                frames, n_store,
+                progress_cb=lambda msg: self.pca_progress.emit(msg))
             self.pca_done.emit(mu, comp, expl)
         except Exception as exc:
             self.pca_error.emit(str(exc))
+
+    def _load_frames(self):
+        """Load every frame from folder as individual float32 arrays."""
+        try:
+            all_files = sorted(os.listdir(self._folder))
+        except OSError:
+            return []
+        raw_files = [f for f in all_files if os.path.splitext(f)[1].lower() == '.raw']
+        tif_files = [f for f in all_files
+                     if os.path.splitext(f)[1].lower() in ('.tiff', '.tif')]
+        files = raw_files if raw_files else tif_files
+        if not files:
+            return []
+        frames = []
+        n = len(files)
+        for i, fname in enumerate(files):
+            self.pca_progress.emit(f'Loading white-field frames ({i + 1}/{n})…')
+            fpath = os.path.join(self._folder, fname)
+            ext   = os.path.splitext(fname)[1].lower()
+            try:
+                if ext == '.raw':
+                    sidecar, _ = _load_sidecar(fpath)
+                    fmt = (sidecar.get('pixel_format') or sidecar.get('pixelformat')
+                           or self._fmt)
+                    w = int(sidecar.get('width',  self._w))
+                    h = int(sidecar.get('height', self._h))
+                    r = RawReader(fpath, fmt, w, h)
+                    for j in range(len(r)):
+                        frames.append(r[j].astype(np.float32))
+                    r.close()
+                elif ext in ('.tiff', '.tif'):
+                    import tifffile
+                    data = tifffile.imread(fpath)
+                    if data.ndim == 2:
+                        frames.append(data.astype(np.float32))
+                    else:
+                        for j in range(data.shape[0]):
+                            frames.append(data[j].astype(np.float32))
+            except Exception as e:
+                print(f'[pca] error loading {fname}: {e}')
+        return frames
 
 
 TIFF_COMPRESSIONS = ['None', 'LZW', 'Deflate', 'ZSTD']
@@ -1301,10 +1364,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
             'Finds closest dark_field_* folder by timestamp\n'
             'and averages all frames as the dark reference.'
         )
+        self.white_chk = QCheckBox('White field')
+        self.white_chk.setToolTip('Enable white-field correction using the selected technique.')
         self.white_combo = QComboBox()
-        self.white_combo.addItems(['None', 'Flat field', 'PCA removal'])
+        self.white_combo.addItems(['Flat field', 'PCA removal'])
         self.white_combo.setToolTip(
-            'None: no white-field correction\n'
             'Flat field: divide by averaged white-field frames\n'
             'PCA removal: project each frame onto a PCA basis built from white-field\n'
             '  frames and subtract the estimated background\n\n'
@@ -1325,15 +1389,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
             'Save current dark/white field selection to this file\'s sidecar JSON.\n'
             'On next open the same fields will be loaded automatically.')
         self.store_fields_btn.setEnabled(False)
-        self.store_fields_btn.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         corr_grid.addWidget(self.dark_chk,            0, 0, 1, 2)
-        corr_grid.addWidget(QLabel('White field:'),   1, 0)
+        corr_grid.addWidget(self.white_chk,           1, 0)
         corr_grid.addWidget(self.white_combo,         1, 1)
-        corr_grid.addWidget(self.store_fields_btn,    0, 2, 2, 1)
         corr_grid.addWidget(self._pca_n_lbl,         2, 0)
-        corr_grid.addWidget(self.pca_n_spin,         2, 1, 1, 2)
-        corr_grid.addWidget(self.corr_status_lbl,    3, 0, 1, 3)
+        corr_grid.addWidget(self.pca_n_spin,         2, 1)
+        corr_grid.addWidget(self.corr_status_lbl,    3, 0, 1, 2)
+        corr_grid.addWidget(self.store_fields_btn,   4, 0, 1, 2)
         sb.addWidget(corr_box)
 
         sb.addStretch()
@@ -1394,7 +1456,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.imview.roi.sigRegionChangeFinished.connect(self._on_roi_moved)
         self.mask_chk.toggled.connect(self._toggle_mask)
         self.dark_chk.toggled.connect(self._toggle_dark_field)
-        self.white_combo.currentIndexChanged.connect(self._on_white_mode_changed)
+        self.white_chk.toggled.connect(self._on_white_chk_toggled)
+        self.white_combo.currentIndexChanged.connect(self._on_white_combo_changed)
         self.pca_n_spin.valueChanged.connect(self._on_pca_n_changed)
         self.store_fields_btn.clicked.connect(self._store_fields_ref)
 
@@ -1508,9 +1571,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         else:
             self.dark_chk.setEnabled(True)
         self.dark_chk.blockSignals(False)
+        self.white_chk.blockSignals(True)
         self.white_combo.blockSignals(True)
         if any_baked:
-            self.white_combo.setCurrentIndex(0)
+            self.white_chk.setChecked(False)
+            self.white_chk.setEnabled(False)
             self.white_combo.setEnabled(False)
             self._white_field       = None
             self._white_field_gain  = None
@@ -1518,7 +1583,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._pca_mean          = None
             self._pca_components    = None
         else:
+            self.white_chk.setEnabled(True)
             self.white_combo.setEnabled(True)
+        self.white_chk.blockSignals(False)
         self.white_combo.blockSignals(False)
 
         self.mask_chk.blockSignals(True)
@@ -1735,7 +1802,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._show_frame(idx)
 
         if idx >= n - 1:
-            self._stop_play()
+            self._start_play()  # loop back to frame 0 while play is active
 
     def _on_roi_dragged(self):
         if self.imview.ui.roiBtn.isChecked():
@@ -1840,7 +1907,6 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 d for d in all_entries
                 if keyword in d and os.path.isdir(os.path.join(search_dir, d))
             ]
-            print(f'[field] candidates in {search_dir!r}: {raw_candidates}')
             if exp_ts:
                 # Sort by absolute timestamp distance from experiment folder
                 candidates = sorted(raw_candidates,
@@ -1997,6 +2063,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 'and averages all frames as the dark reference.')
             self._refresh_corr_status()
             self._refresh_current_frame()
+            self._auto_levels()
             return
         if not self._path:
             self.dark_chk.setChecked(False)
@@ -2023,9 +2090,20 @@ class LucidViewer(ViewerMixin, QMainWindow):
             'Averages all frames as the dark reference.')
         self._refresh_corr_status()
         self._refresh_current_frame()
+        self._auto_levels()
+
+    def _on_white_chk_toggled(self, checked):
+        if checked:
+            self._on_white_mode_changed(self.white_combo.currentIndex() + 1)
+        else:
+            self._on_white_mode_changed(0)
+
+    def _on_white_combo_changed(self, idx):
+        if self.white_chk.isChecked():
+            self._on_white_mode_changed(idx + 1)
 
     def _on_white_mode_changed(self, index):
-        """Handle white field combo selection (0=None, 1=Flat field, 2=PCA removal)."""
+        """Handle white field mode: 0=None, 1=Flat field, 2=PCA removal."""
         if index == 0:
             self._white_mode        = 'none'
             self._white_field       = None
@@ -2035,36 +2113,31 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._pca_components    = None
             self._pca_n_lbl.setVisible(False)
             self.pca_n_spin.setVisible(False)
-            self.white_combo.setToolTip(
-                'None: no white-field correction\n'
-                'Flat field: divide by averaged white-field frames\n'
-                'PCA removal: project each frame onto a PCA basis built from white-field\n'
-                '  frames and subtract the estimated background\n\n'
-                'Disabled options mean no compatible white_field folder was found.')
             self._refresh_corr_status()
             self._refresh_current_frame()
+            self._auto_levels()
 
         elif index == 1:
             self._pca_n_lbl.setVisible(False)
             self.pca_n_spin.setVisible(False)
             if not self._path:
-                self.white_combo.blockSignals(True)
-                self.white_combo.setCurrentIndex(0)
-                self.white_combo.blockSignals(False)
+                self.white_chk.blockSignals(True)
+                self.white_chk.setChecked(False)
+                self.white_chk.blockSignals(False)
                 return
             folder = self._find_field_folder('white_field')
             if folder is None:
                 self.corr_status_lbl.setText('white_field folder not found')
-                self.white_combo.blockSignals(True)
-                self.white_combo.setCurrentIndex(0)
-                self.white_combo.blockSignals(False)
+                self.white_chk.blockSignals(True)
+                self.white_chk.setChecked(False)
+                self.white_chk.blockSignals(False)
                 return
             self._white_field = self._load_field_frame(folder)
             if self._white_field is None:
                 self.corr_status_lbl.setText('White field: no frames loaded')
-                self.white_combo.blockSignals(True)
-                self.white_combo.setCurrentIndex(0)
-                self.white_combo.blockSignals(False)
+                self.white_chk.blockSignals(True)
+                self.white_chk.setChecked(False)
+                self.white_chk.blockSignals(False)
                 return
             self._white_field_gain  = self._read_average_gain(folder)
             self._white_field_error = self._check_field_shape(self._white_field, 'white')
@@ -2077,18 +2150,20 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 'Flat field: divides each frame by the averaged white-field frames.')
             self._refresh_corr_status()
             self._refresh_current_frame()
+            self._auto_levels()
 
         elif index == 2:
             self._pca_n_lbl.setVisible(True)
             self.pca_n_spin.setVisible(True)
             if not self._path:
-                self.white_combo.blockSignals(True)
-                self.white_combo.setCurrentIndex(0)
-                self.white_combo.blockSignals(False)
+                self.white_chk.blockSignals(True)
+                self.white_chk.setChecked(False)
+                self.white_chk.blockSignals(False)
                 return
             self._white_field       = None
             self._white_field_gain  = None
             self._white_field_error = None
+            self._white_mode        = 'pca'
             self._compute_or_load_pca()
 
     def _on_pca_n_changed(self, value):
@@ -2106,19 +2181,20 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 pca_ok = True
 
         model = self.white_combo.model()
-        for i, enabled in enumerate([True, flat_ok, pca_ok]):
+        for i, enabled in enumerate([flat_ok, pca_ok]):
             item = model.item(i)
             if enabled:
                 item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
             else:
                 item.setFlags(Qt.ItemFlag.ItemIsSelectable)
 
-        cur = self.white_combo.currentIndex()
-        if (cur == 1 and not flat_ok) or (cur == 2 and not pca_ok):
-            self.white_combo.blockSignals(True)
-            self.white_combo.setCurrentIndex(0)
-            self.white_combo.blockSignals(False)
-            self._on_white_mode_changed(0)
+        if self.white_chk.isChecked():
+            cur = self.white_combo.currentIndex()
+            if (cur == 0 and not flat_ok) or (cur == 1 and not pca_ok):
+                self.white_chk.blockSignals(True)
+                self.white_chk.setChecked(False)
+                self.white_chk.blockSignals(False)
+                self._on_white_mode_changed(0)
 
     def _count_white_field_frames(self, folder):
         """Estimate total frame count in folder without loading pixel data."""
@@ -2236,9 +2312,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         folder = self._find_field_folder('white_field', min_frames=2)
         if folder is None:
             self.corr_status_lbl.setText('white_field folder not found')
-            self.white_combo.blockSignals(True)
-            self.white_combo.setCurrentIndex(0)
-            self.white_combo.blockSignals(False)
+            self.white_chk.blockSignals(True)
+            self.white_chk.setChecked(False)
+            self.white_chk.blockSignals(False)
             return
 
         h = self._reader.h if self._reader else self.h_spin.value()
@@ -2265,7 +2341,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self.corr_status_lbl.setText(
                         f'PCA ✓  {n_stored} comp cached, top 3: {ev_str}')
                     self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
-                    self.white_combo.setToolTip(
+                    self.white_chk.setToolTip(
                         f'Using: {os.path.basename(folder)}\n'
                         f'Path: {folder}\n\n'
                         'PCA removal: subtracts top N PCA components of the background.')
@@ -2274,33 +2350,22 @@ class LucidViewer(ViewerMixin, QMainWindow):
             except Exception as exc:
                 print(f'[pca] cache load error: {exc}')
 
-        # Load all frames then compute asynchronously
-        self.corr_status_lbl.setText('Loading white field frames for PCA…')
+        # Load frames and compute PCA fully asynchronously
+        fmt = self.fmt_combo.currentText()
+        self.corr_status_lbl.setText('Loading white-field frames…')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
-        frames = self._load_all_field_frames(folder)
-        if len(frames) < 2:
-            self.corr_status_lbl.setText('PCA: need ≥2 white-field frames')
-            self.white_combo.blockSignals(True)
-            self.white_combo.setCurrentIndex(0)
-            self.white_combo.blockSignals(False)
-            self._on_white_mode_changed(0)
-            return
-
-        K = len(frames)
-        mem_gb = K * h * w * 4 / 1e9
-        self.corr_status_lbl.setText(
-            f'Computing PCA ({K} frames, ~{mem_gb:.1f} GB)…')
-        n_store = min(20, K - 1)
         if self._pca_worker is not None:
             self._pca_worker.pca_done.disconnect()
             self._pca_worker.pca_error.disconnect()
+            self._pca_worker.pca_progress.disconnect()
             self._pca_worker.quit()
-        self._pca_worker = PcaComputeWorker(frames, n_components=n_store, parent=self)
+        self._pca_worker = PcaComputeWorker(folder, fmt, w, h, parent=self)
         self._pca_worker.pca_done.connect(
             lambda mu, comp, expl, _cp=cache_path, _f=folder:
                 self._on_pca_computed(mu, comp, expl, _cp, _f)
         )
         self._pca_worker.pca_error.connect(self._on_pca_error)
+        self._pca_worker.pca_progress.connect(self._on_pca_progress)
         self._pca_worker.start()
 
     def _on_pca_computed(self, mean, components, explained, cache_path, folder):
@@ -2320,18 +2385,23 @@ class LucidViewer(ViewerMixin, QMainWindow):
             f'{e*100:.1f}%' for e in explained[:min(3, n_stored)])
         self.corr_status_lbl.setText(f'PCA ✓  {n_stored} comp, top 3: {ev_str}')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
-        self.white_combo.setToolTip(
+        self.white_chk.setToolTip(
             f'Using: {os.path.basename(folder)}\n'
             f'Path: {folder}\n\n'
             'PCA removal: subtracts top N PCA components of the background.')
         self._refresh_current_frame()
+        self._auto_levels()
+
+    def _on_pca_progress(self, msg):
+        self.corr_status_lbl.setText(msg)
+        self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
 
     def _on_pca_error(self, msg):
         self.corr_status_lbl.setText(f'PCA error: {msg}')
         self.corr_status_lbl.setStyleSheet('color: #ff6b6b; font-size: 10px;')
-        self.white_combo.blockSignals(True)
-        self.white_combo.setCurrentIndex(0)
-        self.white_combo.blockSignals(False)
+        self.white_chk.blockSignals(True)
+        self.white_chk.setChecked(False)
+        self.white_chk.blockSignals(False)
         self._white_mode = 'none'
 
     def _apply_stored_field_refs(self):
@@ -2356,16 +2426,18 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if white_folder and os.path.isdir(white_folder) and white_mode in ('flat', 'pca'):
             shape = self._field_folder_shape(white_folder)
             if shape is None or shape == (tw, th):
-                mode_idx = 1 if white_mode == 'flat' else 2
-                # Verify that this mode is currently enabled in the combo
+                combo_idx = 0 if white_mode == 'flat' else 1
                 model = self.white_combo.model()
-                item  = model.item(mode_idx)
+                item  = model.item(combo_idx)
                 if item and (item.flags() & Qt.ItemFlag.ItemIsEnabled):
                     self.white_combo.blockSignals(True)
-                    self.white_combo.setCurrentIndex(mode_idx)
+                    self.white_combo.setCurrentIndex(combo_idx)
                     self.white_combo.blockSignals(False)
-                    self._pca_n_lbl.setVisible(mode_idx == 2)
-                    self.pca_n_spin.setVisible(mode_idx == 2)
+                    self.white_chk.blockSignals(True)
+                    self.white_chk.setChecked(True)
+                    self.white_chk.blockSignals(False)
+                    self._pca_n_lbl.setVisible(combo_idx == 1)
+                    self.pca_n_spin.setVisible(combo_idx == 1)
 
     def _get_or_create_sidecar_path(self):
         """Return best sidecar path for writing.
@@ -2456,7 +2528,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             return
         self._stored_field_refs['white_folder'] = folder
         self._check_white_options()
-        if self.white_combo.currentIndex() > 0:
+        if self.white_chk.isChecked():
             self._reload_fields()
 
     def _select_dark_folder(self):
@@ -2475,12 +2547,6 @@ class LucidViewer(ViewerMixin, QMainWindow):
         """Reload whichever field references are currently selected for the new file."""
         _dark_tip_default = ('Finds closest dark_field_* folder by timestamp\n'
                              'and averages all frames as the dark reference.')
-        _white_tip_default = ('None: no white-field correction\n'
-                              'Flat field: divide by averaged white-field frames\n'
-                              'PCA removal: project each frame onto a PCA basis built from white-field\n'
-                              '  frames and subtract the estimated background\n\n'
-                              'Disabled options mean no compatible white_field folder was found.')
-
         if self.dark_chk.isChecked():
             folder = self._find_field_folder('dark_field')
             self._dark_field       = self._load_field_frame(folder) if folder else None
@@ -2494,7 +2560,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             else:
                 self.dark_chk.setToolTip(_dark_tip_default)
 
-        mode_idx = self.white_combo.currentIndex()
+        mode_idx = (self.white_combo.currentIndex() + 1) if self.white_chk.isChecked() else 0
         if mode_idx == 1:
             folder = self._find_field_folder('white_field')
             self._white_field       = self._load_field_frame(folder) if folder else None
@@ -2502,12 +2568,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._white_field_error = self._check_field_shape(self._white_field, 'white')
             self._white_mode        = 'flat'
             if folder and self._white_field is not None:
-                self.white_combo.setToolTip(
+                self.white_chk.setToolTip(
                     f'Using: {os.path.basename(folder)}\n'
                     f'Path: {folder}\n\n'
                     'Flat field: divides each frame by the averaged white-field frames.')
-            else:
-                self.white_combo.setToolTip(_white_tip_default)
         elif mode_idx == 2:
             self._compute_or_load_pca()  # tooltip updated inside _compute_or_load_pca/_on_pca_computed
         else:
@@ -2517,7 +2581,6 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._white_field_error = None
             self._pca_mean          = None
             self._pca_components    = None
-            self.white_combo.setToolTip(_white_tip_default)
         self._refresh_corr_status()
 
     def _check_field_shape(self, field, name: str):
@@ -2892,6 +2955,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         s.setValue('colormap',      self.cmap_combo.currentText())
         s.setValue('mask_checked',        self.mask_chk.isChecked())
         s.setValue('dark_field_checked',  self.dark_chk.isChecked())
+        s.setValue('white_chk_checked',   self.white_chk.isChecked())
         s.setValue('white_combo_index',   self.white_combo.currentIndex())
         s.setValue('pca_n_components',    self.pca_n_spin.value())
         s.setValue('export_compression',  self._export_compression)
@@ -2925,13 +2989,25 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.dark_chk.blockSignals(True)
         self.dark_chk.setChecked(s.value('dark_field_checked', False, type=bool))
         self.dark_chk.blockSignals(False)
+        # Legacy: old setting stored 0/1/2 in white_combo_index (0=none,1=flat,2=pca)
+        # New: white_chk_checked + white_combo_index (0=flat, 1=pca)
+        raw_combo = s.value('white_combo_index', 0, type=int)
+        if s.contains('white_chk_checked'):
+            chk_checked = s.value('white_chk_checked', False, type=bool)
+            combo_idx   = raw_combo
+        else:
+            chk_checked = raw_combo > 0
+            combo_idx   = max(0, raw_combo - 1)
+        self.white_chk.blockSignals(True)
+        self.white_chk.setChecked(chk_checked)
+        self.white_chk.blockSignals(False)
         self.white_combo.blockSignals(True)
-        self.white_combo.setCurrentIndex(s.value('white_combo_index', 0, type=int))
+        self.white_combo.setCurrentIndex(combo_idx)
         self.white_combo.blockSignals(False)
         self.pca_n_spin.setValue(s.value('pca_n_components', 5, type=int))
-        pca_idx_restored = self.white_combo.currentIndex()
-        self._pca_n_lbl.setVisible(pca_idx_restored == 2)
-        self.pca_n_spin.setVisible(pca_idx_restored == 2)
+        pca_visible = chk_checked and (combo_idx == 1)
+        self._pca_n_lbl.setVisible(pca_visible)
+        self.pca_n_spin.setVisible(pca_visible)
         last = s.value('last_path', '')
         if last:
             self.statusBar().showMessage(f'Last file: {last}')
