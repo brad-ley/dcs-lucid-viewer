@@ -14,7 +14,6 @@ import sys
 import os
 import re
 import json
-import struct
 import time
 import numpy as np
 
@@ -1798,13 +1797,17 @@ class LucidViewer(ViewerMixin, QMainWindow):
         except Exception:
             return None
 
-    def _find_field_folder(self, keyword: str):
+    def _find_field_folder(self, keyword: str, min_frames: int = 1):
         """Return path to best shape-matching folder whose name contains keyword.
 
-        Priority: (1) stored sidecar ref if path exists and shape matches,
-                  (2) most-recent chronological match with matching shape,
-                  (3) most-recent chronological match with unknown shape,
+        Priority: (1) stored sidecar ref if path exists, shape matches, and has
+                      enough frames,
+                  (2) closest-timestamp match with matching shape and enough frames,
+                  (3) closest-timestamp match with unknown shape and enough frames,
                   (4) None.
+
+        min_frames: skip folders that contain fewer than this many frames (use 2
+                    for PCA so pre-averaged single-frame folders are bypassed).
         """
         if not self._path:
             return None
@@ -1818,8 +1821,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if stored and os.path.isdir(stored):
             shape = self._field_folder_shape(stored)
             if shape is None or shape == (tw, th):
-                return stored
-            print(f'[field] stored ref {stored!r} shape {shape} != target {(tw,th)}, ignoring')
+                if min_frames <= 1 or self._count_white_field_frames(stored) >= min_frames:
+                    return stored
+            else:
+                print(f'[field] stored ref {stored!r} shape {shape} != target {(tw,th)}, ignoring')
 
         # --- timestamp-proximity search ---
         parent = os.path.dirname(self._path)
@@ -1855,6 +1860,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
             unknown_shape = None
             for name in candidates:
                 folder = os.path.join(search_dir, name)
+                if min_frames > 1 and self._count_white_field_frames(folder) < min_frames:
+                    print(f'[field] skipping {name!r}: fewer than {min_frames} frames')
+                    continue
                 shape  = self._field_folder_shape(folder)
                 if shape is None:
                     if unknown_shape is None:
@@ -2091,12 +2099,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         """Enable or disable combo items based on what white_field data is available."""
         flat_ok = pca_ok = False
         if self._reader is not None:
-            folder = self._find_field_folder('white_field')
-            if folder:
-                n_frames = self._count_white_field_frames(folder)
-                print(f'[check_white] folder={os.path.basename(folder)}  n_frames={n_frames}')
-                flat_ok = n_frames >= 1
-                pca_ok  = n_frames >= 2
+            if self._find_field_folder('white_field', min_frames=1):
+                flat_ok = True
+            if self._find_field_folder('white_field', min_frames=2):
+                pca_ok = True
 
         model = self.white_combo.model()
         for i, enabled in enumerate([True, flat_ok, pca_ok]):
@@ -2141,22 +2147,16 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 fsize = os.path.getsize(fpath)
                 # Use n_frames from sidecar when present (exported files carry this)
                 n_sc = sidecar.get('n_frames')
-                print(f'[count_frames] {fname}: fmt={fmt} w={w} h={h} fsize={fsize} n_sc={n_sc}')
                 if n_sc is not None:
                     total += max(1, int(n_sc))
-                    print(f'[count_frames]   → sidecar n_frames={max(1, int(n_sc))}')
                     continue
                 try:
                     bpf   = frame_byte_count(fmt, w, h)
-                    count = max(1, int(fsize // bpf))
-                    print(f'[count_frames]   → bpf={bpf:.1f} count={count}')
-                    total += count
-                except Exception as exc:
+                    total += max(1, int(fsize // bpf))
+                except Exception:
                     # Unknown format — estimate conservatively at 2 bytes/pixel
                     bpf_est = w * h * 2
-                    count = (max(1, int(fsize // bpf_est)) if bpf_est else 1)
-                    print(f'[count_frames]   → frame_byte_count raised {exc!r}, fallback bpf={bpf_est} count={count}')
-                    total += count
+                    total += max(1, int(fsize // bpf_est)) if bpf_est else 1
             elif ext in ('.tiff', '.tif'):
                 try:
                     import tifffile
@@ -2232,7 +2232,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _compute_or_load_pca(self):
         """Load cached PCA basis or compute from white_field frames (async)."""
-        folder = self._find_field_folder('white_field')
+        folder = self._find_field_folder('white_field', min_frames=2)
         if folder is None:
             self.corr_status_lbl.setText('white_field folder not found')
             self.white_combo.blockSignals(True)
@@ -2277,7 +2277,6 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.corr_status_lbl.setText('Loading white field frames for PCA…')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
         frames = self._load_all_field_frames(folder)
-        print(f'[pca] _load_all_field_frames returned {len(frames)} frames from {os.path.basename(folder)}')
         if len(frames) < 2:
             self.corr_status_lbl.setText('PCA: need ≥2 white-field frames')
             self.white_combo.blockSignals(True)
@@ -2368,12 +2367,21 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self.pca_n_spin.setVisible(mode_idx == 2)
 
     def _get_or_create_sidecar_path(self):
-        """Return best sidecar path: existing one if found, else <stem>.json."""
+        """Return best sidecar path for writing.
+
+        Prefers metadata.json (camera-written) in the same directory so field
+        references stay in one file alongside capture metadata.  Falls back to
+        an existing <stem>.json, then creates metadata.json if nothing exists.
+        """
+        dir_ = os.path.dirname(self._path)
+        meta = os.path.join(dir_, 'metadata.json')
+        if os.path.isfile(meta):
+            return meta
         stem = os.path.splitext(self._path)[0]
         for candidate in [self._path + '.json', stem + '.json']:
             if os.path.isfile(candidate):
                 return candidate
-        return stem + '.json'
+        return meta
 
     def _write_sidecar_field_refs(self, updates: dict):
         """Merge *updates* into the field_references section of the sidecar and save."""
