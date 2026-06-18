@@ -143,6 +143,7 @@ private slots:
     // Triggered from the Tools > Field Capture submenu.
     void onCaptureWhiteField();
     void onCaptureWhiteFieldPCA();
+    void onCaptureWhiteFieldMaster();
     void onCaptureDarkField();
     void onCaptureDotGrid();
     void onCaptureAmbient();
@@ -312,9 +313,13 @@ private:
     // and to adjust the "Acquisition finished" log message.
     bool m_isFieldCapture;
 
-    // When > 0, stop acquisition automatically once this many frames have been averaged.
-    // Used by the "White field multi-frame" PCA capture. Reset to 0 after each run.
+    // When > 0, stop acquisition automatically once this many frames have been averaged
+    // AND at least 5 seconds have elapsed. Used by PCA/Master captures. Reset to 0 after each run.
     int m_pcaFrameTarget;
+
+    // Timestamp (ms since epoch) when the PCA/Master capture first received a frame.
+    // Used to enforce the max(5s, 100f) stop condition. -1 when no PCA capture is running.
+    qint64 m_pcaStartMs;
 
     // PID of the cmd.exe that launched lucid_viewer (via lucid_viewer.bat).
     // Guards against double-launching while the window is still starting up.

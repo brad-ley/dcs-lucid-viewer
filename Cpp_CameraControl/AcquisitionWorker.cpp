@@ -156,6 +156,7 @@ AcquisitionWorker::AcquisitionWorker(QObject* parent)
     , m_frameCount(0)
     , m_saveFormat(SaveFormat::RawSequence)
     , m_fieldType(FieldType::None)
+    , m_rawFrameLimit(0)
     , m_acquisitionDone(false)
     , m_customSessionName()      // Empty = auto-generate timestamp name
     , m_customFieldName()        // Set only for FieldType::Custom
@@ -219,6 +220,15 @@ void AcquisitionWorker::setFieldType(FieldType fieldType)
     // FieldType::None  = normal acquisition; save frames per m_saveFormat.
     // WhiteField / DarkField = streaming Welford mean, saved as a single TIFF.
     m_fieldType = fieldType;
+}
+
+
+// =============================================================================
+// setRawFrameLimit
+// =============================================================================
+void AcquisitionWorker::setRawFrameLimit(int n)
+{
+    m_rawFrameLimit = n;
 }
 
 
@@ -559,7 +569,9 @@ void AcquisitionWorker::run()
         if (m_fieldType == FieldType::WhiteField)
             formatString = "White Field capture (streaming Welford mean → white_field_mean.tiff)";
         else if (m_fieldType == FieldType::WhiteFieldPCA)
-            formatString = "White Field multi-frame capture (100 frames target, 10s safety timeout → white_field_mean.tiff)";
+            formatString = "White Field multi-frame PCA capture (max(5s,100f) Welford + recording.raw → white_field_mean.tiff)";
+        else if (m_fieldType == FieldType::WhiteFieldMaster)
+            formatString = "White Field master capture (max(5s,100f) Welford + recording.raw → white_field_master_mean.tiff)";
         else if (m_fieldType == FieldType::DarkField)
             formatString = "Dark Field capture (streaming Welford mean → dark_field_mean.tiff)";
         else if (m_fieldType == FieldType::DotGrid)
@@ -619,8 +631,12 @@ void AcquisitionWorker::run()
                 }
             }
 
-            // Open the raw video file inside the writer thread (only used in RawVideo mode)
-            if (m_saveFormat == SaveFormat::RawVideo && m_fieldType == FieldType::None)
+            // Open the raw video file for normal RawVideo acquisitions, or for
+            // PCA/Master field captures that also write raw frames alongside the mean.
+            const bool isPCACapture = (m_fieldType == FieldType::WhiteFieldPCA ||
+                                       m_fieldType == FieldType::WhiteFieldMaster);
+            if ((m_saveFormat == SaveFormat::RawVideo && m_fieldType == FieldType::None)
+                || (isPCACapture && m_rawFrameLimit > 0))
             {
                 QString videoPath = m_sessionPath + QDir::separator() + "recording.raw";
                 videoFile.open(videoPath.toStdString(), std::ios::binary);
@@ -765,6 +781,14 @@ void AcquisitionWorker::run()
 
                     wf_n++;
                     if (wf_bitsPerPixel == 0) wf_bitsPerPixel = frame.bitsPerPixel;
+
+                    // For PCA/Master captures, also write raw frames to recording.raw
+                    // until we've written m_rawFrameLimit frames.
+                    if (isPCACapture && videoFile.is_open() && (int)wf_n <= m_rawFrameLimit)
+                    {
+                        videoFile.write(reinterpret_cast<const char*>(frame.bytes.data()),
+                                        static_cast<std::streamsize>(frame.bytes.size()));
+                    }
 
                     // Running mean of gain and exposure — incremental update avoids
                     // accumulating a large sum that could lose precision.
@@ -1110,10 +1134,11 @@ void AcquisitionWorker::run()
                 std::string fieldTypeStr;
                 switch (m_fieldType) {
                     case FieldType::WhiteField:
-                    case FieldType::WhiteFieldPCA: fieldTypeStr = "white_field"; break;
-                    case FieldType::DarkField:     fieldTypeStr = "dark_field";  break;
-                    case FieldType::DotGrid:       fieldTypeStr = "dot_grid";    break;
-                    case FieldType::Ambient:       fieldTypeStr = "ambient";     break;
+                    case FieldType::WhiteFieldPCA:    fieldTypeStr = "white_field";        break;
+                    case FieldType::WhiteFieldMaster: fieldTypeStr = "white_field_master"; break;
+                    case FieldType::DarkField:        fieldTypeStr = "dark_field";         break;
+                    case FieldType::DotGrid:          fieldTypeStr = "dot_grid";           break;
+                    case FieldType::Ambient:          fieldTypeStr = "ambient";            break;
                     case FieldType::Custom:
                         fieldTypeStr = m_customFieldName.isEmpty()
                                            ? "custom"

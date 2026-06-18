@@ -111,13 +111,14 @@ public:
     // rejected averaging and save a single-page mean TIFF instead of per-frame files.
     enum class FieldType
     {
-        None,            // Normal acquisition — save frames per the SaveFormat
-        WhiteField,      // Capture bright reference — saves white_field_mean.tiff
-        WhiteFieldPCA,   // Multi-frame white field for PCA — saves white_field_mean.tiff (100+ frames)
-        DarkField,       // Capture dark reference  — saves dark_field_mean.tiff
-        DotGrid,         // Capture dot-grid registration image — saves dot_grid_mean.tiff
-        Ambient,         // Capture ambient reference — saves ambient_mean.tiff
-        Custom           // Capture with user-defined base name — saves {name}_mean.tiff
+        None,              // Normal acquisition — save frames per the SaveFormat
+        WhiteField,        // 5s Welford mean → white_field_mean.tiff
+        WhiteFieldPCA,     // max(5s,100f) Welford + recording.raw (100f) → white_field_mean.tiff
+        WhiteFieldMaster,  // Same as PCA but labeled master (no-cell reference) → white_field_master_mean.tiff
+        DarkField,         // Capture dark reference  — saves dark_field_mean.tiff
+        DotGrid,           // Capture dot-grid registration image — saves dot_grid_mean.tiff
+        Ambient,           // Capture ambient reference — saves ambient_mean.tiff
+        Custom             // Capture with user-defined base name — saves {name}_mean.tiff
     };
 
     // Constructor.
@@ -148,6 +149,10 @@ public:
     // streaming Welford mean computation instead of per-frame file saving).
     // Must be called BEFORE start().
     void setFieldType(FieldType ft);
+
+    // For WhiteFieldPCA / WhiteFieldMaster — write the first N raw frames to recording.raw
+    // alongside the Welford mean.  0 (default) disables raw frame writing.
+    void setRawFrameLimit(int n);
 
     // For FieldType::Custom — the base name used for the output TIFF and metadata.
     // E.g. "dot_grid" → dot_grid_mean.tiff.  Has no effect for other FieldTypes.
@@ -306,6 +311,10 @@ private:
 
     // Field capture type: None = normal acquisition
     FieldType  m_fieldType;
+
+    // For PCA/Master field captures: write raw frames to recording.raw until this many
+    // frames have been written (0 = don't write raw).
+    int m_rawFrameLimit;
 
     // -------------------------------------------------------------------------
     // Producer-consumer queue — shared between acquisition loop and writer thread
