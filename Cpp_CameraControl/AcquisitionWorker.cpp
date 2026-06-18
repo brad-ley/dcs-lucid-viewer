@@ -558,6 +558,8 @@ void AcquisitionWorker::run()
         QString formatString;
         if (m_fieldType == FieldType::WhiteField)
             formatString = "White Field capture (streaming Welford mean → white_field_mean.tiff)";
+        else if (m_fieldType == FieldType::WhiteFieldPCA)
+            formatString = "White Field multi-frame capture (100 frames target, 10s safety timeout → white_field_mean.tiff)";
         else if (m_fieldType == FieldType::DarkField)
             formatString = "Dark Field capture (streaming Welford mean → dark_field_mean.tiff)";
         else if (m_fieldType == FieldType::DotGrid)
@@ -1107,10 +1109,11 @@ void AcquisitionWorker::run()
             {
                 std::string fieldTypeStr;
                 switch (m_fieldType) {
-                    case FieldType::WhiteField: fieldTypeStr = "white_field"; break;
-                    case FieldType::DarkField:  fieldTypeStr = "dark_field";  break;
-                    case FieldType::DotGrid:    fieldTypeStr = "dot_grid";    break;
-                    case FieldType::Ambient:    fieldTypeStr = "ambient";     break;
+                    case FieldType::WhiteField:
+                    case FieldType::WhiteFieldPCA: fieldTypeStr = "white_field"; break;
+                    case FieldType::DarkField:     fieldTypeStr = "dark_field";  break;
+                    case FieldType::DotGrid:       fieldTypeStr = "dot_grid";    break;
+                    case FieldType::Ambient:       fieldTypeStr = "ambient";     break;
                     case FieldType::Custom:
                         fieldTypeStr = m_customFieldName.isEmpty()
                                            ? "custom"

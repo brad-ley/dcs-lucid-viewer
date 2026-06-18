@@ -568,6 +568,14 @@ def _field_correct_float(frame, dark, white,
     return out.astype(np.float32)
 
 
+def _auto_pca_n(explained: np.ndarray) -> int:
+    """Scree-plot elbow: first i where explained[i] <= 1.5 * explained[i+1]; use i components."""
+    for i in range(len(explained) - 1):
+        if explained[i] <= 1.5 * explained[i + 1]:
+            return max(1, i)
+    return max(1, len(explained))
+
+
 def _compute_pca_from_frames(frames, n_components=20, progress_cb=None):
     """
     PCA on a list of (H, W) float32 frames using the frame-space covariance
@@ -844,6 +852,109 @@ class TiffExportWorker(QThread):
             self.export_error.emit(str(exc))
 
 
+class GifExportWorker(QThread):
+    progress     = pyqtSignal(int, int)   # frames_done, total
+    export_done  = pyqtSignal(str)
+    export_error = pyqtSignal(str)
+
+    def __init__(self, out_path, reader, cache, n, step, scale, fps,
+                 levels,
+                 dark_field=None, dark_field_gain=None,
+                 white_field=None, white_field_gain=None,
+                 pca_mean=None, pca_components=None, pca_n_components=5,
+                 gains=None, parent=None):
+        super().__init__(parent)
+        self._out_path         = out_path
+        self._reader           = reader
+        self._cache            = dict(cache)
+        self._n                = n
+        self._step             = step
+        self._scale            = scale
+        self._fps              = fps
+        self._levels           = levels
+        self._dark_field       = dark_field
+        self._dark_field_gain  = dark_field_gain
+        self._white_field      = white_field
+        self._white_field_gain = white_field_gain
+        self._pca_mean         = pca_mean
+        self._pca_components   = pca_components
+        self._pca_n_components = pca_n_components
+        self._gains            = gains
+        self._cancelled        = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def _corrected_float(self, frame, data_gain):
+        if self._pca_mean is not None and self._pca_components is not None:
+            mu   = self._pca_mean
+            comp = self._pca_components
+            n    = min(self._pca_n_components, comp.shape[0])
+            f    = frame.astype(np.float32)
+            dark = self._dark_field
+            if dark is not None and data_gain is not None and self._dark_field_gain is not None:
+                dark = dark * np.float32(10 ** ((data_gain - self._dark_field_gain) / 20.0))
+            if dark is not None:
+                f = f - dark
+            d_c    = f.ravel() - mu
+            coeffs = comp[:n] @ d_c
+            bg     = (mu + comp[:n].T @ coeffs).reshape(frame.shape)
+            bg_floor = np.maximum(mu.reshape(frame.shape) * np.float32(0.5), np.float32(1.0))
+            np.maximum(bg, bg_floor, out=bg)
+            return np.clip(f / bg, np.float32(0.0), np.float32(10.0))
+        return _field_correct_float(
+            frame, self._dark_field, self._white_field,
+            self._dark_field_gain, self._white_field_gain, data_gain,
+        )
+
+    def run(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.export_error.emit('Pillow (PIL) not installed — cannot export GIF.\n'
+                                   'Install with:  pip install pillow')
+            return
+        lo, hi = self._levels
+        span   = max(float(hi - lo), 1e-6)
+        indices = list(range(0, self._n, self._step))
+        if not indices:
+            self.export_error.emit('No frames to export.')
+            return
+        n_out = len(indices)
+        frames_pil = []
+        for done, idx in enumerate(indices):
+            if self._cancelled:
+                self.export_error.emit('GIF export cancelled.')
+                return
+            frame = self._cache[idx] if idx in self._cache else self._reader[idx]
+            data_gain = (float(self._gains[idx])
+                         if self._gains is not None and idx < len(self._gains) else None)
+            corr = self._corrected_float(frame, data_gain)
+            display = corr if corr is not None else frame.astype(np.float32)
+            u8 = np.clip((display - lo) / span * 255.0, 0.0, 255.0).astype(np.uint8)
+            img = Image.fromarray(u8)
+            if abs(self._scale - 1.0) > 0.001:
+                new_w = max(1, int(u8.shape[1] * self._scale))
+                new_h = max(1, int(u8.shape[0] * self._scale))
+                img = img.resize((new_w, new_h), Image.LANCZOS)
+            frames_pil.append(img.convert('P', dither=0, palette=Image.Palette.ADAPTIVE))
+            self.progress.emit(done + 1, n_out)
+        if not frames_pil:
+            self.export_error.emit('No frames could be loaded.')
+            return
+        try:
+            duration_ms = max(1, int(1000.0 / max(self._fps, 0.01)))
+            frames_pil[0].save(
+                self._out_path,
+                save_all=True, append_images=frames_pil[1:],
+                loop=0, duration=duration_ms, optimize=False,
+            )
+            self.export_done.emit(
+                f'GIF exported ({len(frames_pil)} frames) → {os.path.basename(self._out_path)}')
+        except Exception as exc:
+            self.export_error.emit(str(exc))
+
+
 class PcaComputeWorker(QThread):
     pca_done     = pyqtSignal(object, object, object)  # mean, components, explained
     pca_error    = pyqtSignal(str)
@@ -1064,6 +1175,84 @@ class _ExportProgressDialog(QDialog):
         self._label.setText(f'{self._phase} frame {done} / {total}…')
 
 
+class _GifExportDialog(QDialog):
+    """Settings dialog for GIF export: step, scale, fps."""
+
+    def __init__(self, n_frames, w, h, parent=None, stylesheet=''):
+        super().__init__(parent)
+        self.setWindowTitle('Export GIF…')
+        self.setMinimumWidth(320)
+        if stylesheet:
+            self.setStyleSheet(stylesheet)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self._step_spin = QSpinBox()
+        self._step_spin.setRange(1, max(1, n_frames))
+        self._step_spin.setValue(1)
+        self._step_spin.setSuffix('  frame(s)')
+        form.addRow('Export every:', self._step_spin)
+
+        self._scale_spin = QSpinBox()
+        self._scale_spin.setRange(5, 100)
+        self._scale_spin.setSingleStep(5)
+        self._scale_spin.setValue(50)
+        self._scale_spin.setSuffix(' %')
+        form.addRow('Spatial scale:', self._scale_spin)
+
+        self._fps_spin = QSpinBox()
+        self._fps_spin.setRange(1, 60)
+        self._fps_spin.setValue(10)
+        self._fps_spin.setSuffix(' fps')
+        form.addRow('Playback FPS:', self._fps_spin)
+
+        layout.addLayout(form)
+
+        self._est_lbl = QLabel()
+        self._est_lbl.setStyleSheet('color: #888; font-size: 10px;')
+        layout.addWidget(self._est_lbl)
+
+        self._n_frames = n_frames
+        self._w        = w
+        self._h        = h
+        self._step_spin.valueChanged.connect(self._update_estimate)
+        self._scale_spin.valueChanged.connect(self._update_estimate)
+        self._update_estimate()
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+        self.adjustSize()
+
+    def _update_estimate(self):
+        step  = self._step_spin.value()
+        scale = self._scale_spin.value() / 100.0
+        n_out = max(1, (self._n_frames + step - 1) // step)
+        ow    = max(1, int(self._w * scale))
+        oh    = max(1, int(self._h * scale))
+        est_mb = n_out * ow * oh * 0.25 / 1024 / 1024
+        self._est_lbl.setText(
+            f'≈ {n_out} frames  ·  {ow}×{oh} px  ·  ~{est_mb:.1f} MB uncompressed')
+
+    @property
+    def step(self):
+        return self._step_spin.value()
+
+    @property
+    def scale(self):
+        return self._scale_spin.value() / 100.0
+
+    @property
+    def fps(self):
+        return self._fps_spin.value()
+
+
 # ── Trigger-aware slider ──────────────────────────────────────────────────────
 
 class TriggerSlider(QSlider):
@@ -1192,6 +1381,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._cache_max         = 8
         self._roi_user_set      = False
         self._export_worker      = None   # TiffExportWorker while an export is running
+        self._gif_worker         = None   # GifExportWorker while a GIF export is running
         self._export_compression = 'None'
         self._export_imagej      = False
         self._dark_field        = None   # float32 (H, W) averaged dark frame, or None
@@ -1237,6 +1427,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._export_act.setEnabled(False)
         self._export_act.triggered.connect(self._export_tiff)
         file_menu.addAction(self._export_act)
+        self._export_gif_act = QAction('Export &GIF…', self)
+        self._export_gif_act.setShortcut(QKeySequence('Ctrl+G'))
+        self._export_gif_act.setEnabled(False)
+        self._export_gif_act.triggered.connect(self._export_gif)
+        file_menu.addAction(self._export_gif_act)
         file_menu.addSeparator()
         set_white_act = QAction('Set &white field folder…', self)
         set_white_act.triggered.connect(self._select_white_folder)
@@ -1638,6 +1833,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         self.reload_btn.setEnabled(True)
         self._export_act.setEnabled(True)
+        self._export_gif_act.setEnabled(True)
 
         self._stop_play()
         self.frame_slider.setMaximum(max(0, n - 1))
@@ -1864,7 +2060,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         except Exception:
             return None
 
-    def _find_field_folder(self, keyword: str, min_frames: int = 1):
+    def _find_field_folder(self, keyword: str, min_frames: int = 1, sidecar_key: str = None):
         """Return path to best shape-matching folder whose name contains keyword.
 
         Priority: (1) stored sidecar ref if path exists, shape matches, and has
@@ -1884,7 +2080,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         # --- stored sidecar reference ---
         refs = self._stored_field_refs or {}
-        stored = refs.get('dark_folder' if 'dark' in keyword else 'white_folder')
+        stored = refs.get(sidecar_key if sidecar_key else ('dark_folder' if 'dark' in keyword else 'white_folder'))
         if stored and os.path.isdir(stored):
             shape = self._field_folder_shape(stored)
             if shape is None or shape == (tw, th):
@@ -2125,7 +2321,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 self.white_chk.setChecked(False)
                 self.white_chk.blockSignals(False)
                 return
-            folder = self._find_field_folder('white_field')
+            folder = self._find_field_folder('white_field', sidecar_key='white_folder')
             if folder is None:
                 self.corr_status_lbl.setText('white_field folder not found')
                 self.white_chk.blockSignals(True)
@@ -2309,7 +2505,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _compute_or_load_pca(self):
         """Load cached PCA basis or compute from white_field frames (async)."""
-        folder = self._find_field_folder('white_field', min_frames=2)
+        folder = self._find_field_folder('white_field', min_frames=2, sidecar_key='white_pca_folder')
         if folder is None:
             self.corr_status_lbl.setText('white_field folder not found')
             self.white_chk.blockSignals(True)
@@ -2334,8 +2530,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self._white_mode     = 'pca'
                     n_stored = comp.shape[0]
                     try:
+                        explained = data['explained']
+                        n_auto = _auto_pca_n(explained)
+                        self.pca_n_spin.blockSignals(True)
+                        self.pca_n_spin.setValue(n_auto)
+                        self.pca_n_spin.blockSignals(False)
+                        self._pca_n_components = n_auto
                         ev_str = ', '.join(
-                            f'{e*100:.1f}%' for e in data['explained'][:min(3, n_stored)])
+                            f'{e*100:.1f}%' for e in explained[:min(3, n_stored)])
                     except Exception:
                         ev_str = '?'
                     self.corr_status_lbl.setText(
@@ -2381,6 +2583,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         except Exception as exc:
             print(f'[pca] cache save error: {exc}')
         n_stored = components.shape[0]
+        n_auto = _auto_pca_n(explained)
+        self.pca_n_spin.blockSignals(True)
+        self.pca_n_spin.setValue(n_auto)
+        self.pca_n_spin.blockSignals(False)
+        self._pca_n_components = n_auto
         ev_str = ', '.join(
             f'{e*100:.1f}%' for e in explained[:min(3, n_stored)])
         self.corr_status_lbl.setText(f'PCA ✓  {n_stored} comp, top 3: {ev_str}')
@@ -2416,8 +2623,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         th = self._reader.h if self._reader else self.h_spin.value()
 
         dark_folder  = refs.get('dark_folder')
-        white_folder = refs.get('white_folder')
         white_mode   = refs.get('white_mode', 'none')
+        if white_mode == 'pca':
+            white_folder = refs.get('white_pca_folder') or refs.get('white_folder')
+        else:
+            white_folder = refs.get('white_folder')
 
         if dark_folder and os.path.isdir(dark_folder):
             shape = self._field_folder_shape(dark_folder)
@@ -2494,7 +2704,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 updates['white_folder'] = folder
                 updates['white_mode'] = 'flat'
         elif self._white_mode == 'pca' and self._pca_components is not None and self._pca_folder:
-            updates['white_folder'] = self._pca_folder
+            updates['white_pca_folder'] = self._pca_folder
             updates['white_mode'] = 'pca'
         if not updates:
             self.corr_status_lbl.setText('No active fields to store')
@@ -2887,11 +3097,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         def on_finished(msg):
             self._export_act.setEnabled(True)
+            self._export_gif_act.setEnabled(True)
             self.statusBar().showMessage(msg)
             dlg.close()
 
         def on_error(msg):
             self._export_act.setEnabled(True)
+            self._export_gif_act.setEnabled(True)
             if msg != 'Export cancelled.':
                 QMessageBox.warning(self, 'Export error', msg)
             self.statusBar().showMessage(msg)
@@ -2908,9 +3120,97 @@ class LucidViewer(ViewerMixin, QMainWindow):
         worker.finished.connect(worker.deleteLater)
 
         self._export_act.setEnabled(False)
+        self._export_gif_act.setEnabled(False)
         self.statusBar().showMessage(f'Exporting {n} frames…')
         worker.start()
         dlg.show()
+
+    def _export_gif(self):
+        if self._reader is None:
+            return
+        try:
+            from PIL import Image  # noqa: F401
+        except ImportError:
+            QMessageBox.warning(self, 'Missing dependency',
+                                'Pillow is required for GIF export.\n'
+                                'Install it with:  pip install pillow')
+            return
+
+        n = self._reader_len()
+        w = self._reader.w
+        h = self._reader.h
+
+        dlg_settings = _GifExportDialog(n, w, h, parent=self, stylesheet=_DARK_STYLE)
+        if dlg_settings.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        step  = dlg_settings.step
+        scale = dlg_settings.scale
+        fps   = dlg_settings.fps
+
+        base     = os.path.splitext(self._path)[0] if self._path else ''
+        out_path, _ = QFileDialog.getSaveFileName(
+            self, 'Export GIF', base + '.gif', 'GIF files (*.gif);;All files (*)')
+        if not out_path:
+            return
+
+        levels = self.imview.getLevels()
+
+        pca_mean = self._pca_mean       if self._white_mode == 'pca' else None
+        pca_comp = self._pca_components if self._white_mode == 'pca' else None
+        worker = GifExportWorker(
+            out_path, self._reader, self._cache, n, step, scale, fps,
+            levels,
+            dark_field=self._dark_field,
+            dark_field_gain=self._dark_field_gain,
+            white_field=self._white_field if self._white_mode == 'flat' else None,
+            white_field_gain=self._white_field_gain,
+            pca_mean=pca_mean,
+            pca_components=pca_comp,
+            pca_n_components=self._pca_n_components,
+            gains=self._gains,
+            parent=self,
+        )
+        self._gif_worker = worker
+
+        prog_dlg = _ExportProgressDialog(
+            max(1, (n + step - 1) // step), parent=self, stylesheet=_DARK_STYLE)
+        prog_dlg.setWindowTitle('Exporting GIF…')
+        prog_dlg.set_phase('Exporting')
+        prog_dlg.cancel_requested.connect(worker.cancel)
+
+        def on_progress(done, total):
+            self.statusBar().showMessage(f'Exporting GIF frame {done} / {total}…')
+            prog_dlg.update_progress(done, total)
+
+        def on_finished(msg):
+            self._export_act.setEnabled(True)
+            self._export_gif_act.setEnabled(True)
+            self.statusBar().showMessage(msg)
+            prog_dlg.close()
+
+        def on_error(msg):
+            self._export_act.setEnabled(True)
+            self._export_gif_act.setEnabled(True)
+            if msg != 'GIF export cancelled.':
+                QMessageBox.warning(self, 'GIF export error', msg)
+            self.statusBar().showMessage(msg)
+            prog_dlg.close()
+
+        def on_worker_done():
+            self._gif_worker = None
+
+        worker.progress.connect(on_progress)
+        worker.export_done.connect(on_finished)
+        worker.export_error.connect(on_error)
+        worker.finished.connect(on_worker_done)
+        worker.finished.connect(worker.deleteLater)
+
+        self._export_act.setEnabled(False)
+        self._export_gif_act.setEnabled(False)
+        self.statusBar().showMessage(f'Exporting GIF ({(n + step - 1) // step} frames)…')
+        worker.start()
+        prog_dlg.show()
 
     # ── Tools ─────────────────────────────────────────────────────────────────
     # def _launch_viewer(self):

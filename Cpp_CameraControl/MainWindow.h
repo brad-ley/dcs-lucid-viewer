@@ -142,6 +142,7 @@ private slots:
     // --- Field capture slots ---
     // Triggered from the Tools > Field Capture submenu.
     void onCaptureWhiteField();
+    void onCaptureWhiteFieldPCA();
     void onCaptureDarkField();
     void onCaptureDotGrid();
     void onCaptureAmbient();
@@ -310,6 +311,10 @@ private:
     // Used to relabel the "Frames saved" counter to "Frames averaged" in the UI
     // and to adjust the "Acquisition finished" log message.
     bool m_isFieldCapture;
+
+    // When > 0, stop acquisition automatically once this many frames have been averaged.
+    // Used by the "White field multi-frame" PCA capture. Reset to 0 after each run.
+    int m_pcaFrameTarget;
 
     // PID of the cmd.exe that launched lucid_viewer (via lucid_viewer.bat).
     // Guards against double-launching while the window is still starting up.

@@ -111,12 +111,13 @@ public:
     // rejected averaging and save a single-page mean TIFF instead of per-frame files.
     enum class FieldType
     {
-        None,        // Normal acquisition — save frames per the SaveFormat
-        WhiteField,  // Capture bright reference — saves white_field_mean.tiff
-        DarkField,   // Capture dark reference  — saves dark_field_mean.tiff
-        DotGrid,     // Capture dot-grid registration image — saves dot_grid_mean.tiff
-        Ambient,     // Capture ambient reference — saves ambient_mean.tiff
-        Custom       // Capture with user-defined base name — saves {name}_mean.tiff
+        None,            // Normal acquisition — save frames per the SaveFormat
+        WhiteField,      // Capture bright reference — saves white_field_mean.tiff
+        WhiteFieldPCA,   // Multi-frame white field for PCA — saves white_field_mean.tiff (100+ frames)
+        DarkField,       // Capture dark reference  — saves dark_field_mean.tiff
+        DotGrid,         // Capture dot-grid registration image — saves dot_grid_mean.tiff
+        Ambient,         // Capture ambient reference — saves ambient_mean.tiff
+        Custom           // Capture with user-defined base name — saves {name}_mean.tiff
     };
 
     // Constructor.

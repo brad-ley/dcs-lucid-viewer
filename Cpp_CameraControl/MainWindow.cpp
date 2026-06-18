@@ -77,7 +77,7 @@ MainWindow::MainWindow(QWidget *parent)
       m_reorderButton(nullptr), m_previewDialog(nullptr),
       m_autoStopTriggerTimer(nullptr), m_autoStopDisplayTimer(nullptr),
       m_autoStopSecondsRemaining(0), m_autoStopPendingDurationMs(0),
-      m_isFieldCapture(false) {
+      m_isFieldCapture(false), m_pcaFrameTarget(0) {
   setWindowTitle("Lucid Camera Acquisition Tool");
   setMinimumSize(600, 750); // Minimum window size in pixels
 
@@ -704,6 +704,13 @@ void MainWindow::buildUI() {
       "Saves a per-pixel outlier-rejected mean as white_field_mean.tiff.");
   connect(whiteFieldAction, &QAction::triggered, this,
           &MainWindow::onCaptureWhiteField);
+
+  QAction *whiteFieldPCAAction = fieldCaptureMenu->addAction("White field multi-frame");
+  whiteFieldPCAAction->setToolTip(
+      "Acquire frames until at least 100 have been averaged (for PCA-based\n"
+      "background removal). Saves a per-pixel mean as white_field_mean.tiff.");
+  connect(whiteFieldPCAAction, &QAction::triggered, this,
+          &MainWindow::onCaptureWhiteFieldPCA);
 
   QAction *darkFieldAction = fieldCaptureMenu->addAction("Dark Field");
   darkFieldAction->setToolTip(
@@ -1517,6 +1524,9 @@ void MainWindow::onFramesSaved(int count) {
   const QString label =
       m_isFieldCapture ? "Frames averaged: %1" : "Frames saved: %1";
   m_frameCountLabel->setText(label.arg(count));
+
+  if (m_pcaFrameTarget > 0 && count >= m_pcaFrameTarget)
+    onStopClicked();
 }
 
 // =============================================================================
@@ -1581,6 +1591,7 @@ void MainWindow::onWorkerFinished() {
             .arg(savedPath));
   }
   m_isFieldCapture = false;
+  m_pcaFrameTarget = 0;
 
   // Re-enable live-apply now that the stream has ended and the node map is
   // free.
@@ -1987,6 +1998,10 @@ void MainWindow::onCaptureWhiteField() {
   startFieldCapture(AcquisitionWorker::FieldType::WhiteField);
 }
 
+void MainWindow::onCaptureWhiteFieldPCA() {
+  startFieldCapture(AcquisitionWorker::FieldType::WhiteFieldPCA);
+}
+
 void MainWindow::onCaptureDarkField() {
   startFieldCapture(AcquisitionWorker::FieldType::DarkField);
 }
@@ -2049,12 +2064,13 @@ void MainWindow::startFieldCapture(AcquisitionWorker::FieldType ft) {
   // Build the session folder name: {type}_YYYYMMDD_HHmmss
   QString prefix;
   switch (ft) {
-  case AcquisitionWorker::FieldType::WhiteField: prefix = "white_field_"; break;
-  case AcquisitionWorker::FieldType::DarkField:  prefix = "dark_field_";  break;
-  case AcquisitionWorker::FieldType::DotGrid:    prefix = "dot_grid_";    break;
-  case AcquisitionWorker::FieldType::Ambient:    prefix = "ambient_";     break;
+  case AcquisitionWorker::FieldType::WhiteField:    prefix = "white_field_mean_"; break;
+  case AcquisitionWorker::FieldType::WhiteFieldPCA: prefix = "white_field_";      break;
+  case AcquisitionWorker::FieldType::DarkField:     prefix = "dark_field_mean_";  break;
+  case AcquisitionWorker::FieldType::DotGrid:       prefix = "dot_grid_mean_";    break;
+  case AcquisitionWorker::FieldType::Ambient:       prefix = "ambient_mean_";     break;
   case AcquisitionWorker::FieldType::Custom:
-    prefix = m_sessionNameEdit->text().trimmed() + "_";
+    prefix = m_sessionNameEdit->text().trimmed() + "_mean_";
     break;
   default: prefix = "field_"; break;
   }
@@ -2130,26 +2146,37 @@ void MainWindow::startFieldCapture(AcquisitionWorker::FieldType ft) {
 
   m_fpsTimer->start();
 
-  // Force a 5-second auto-stop regardless of the user's auto-stop configuration
-  constexpr int fieldCaptureDurationMs = 5000;
-  m_autoStopSecondsRemaining = 5;
+  // PCA multi-frame capture: run until 100 frames averaged (300s safety timeout).
+  // Standard field captures: forced 5-second auto-stop.
+  const bool isPCA = (ft == AcquisitionWorker::FieldType::WhiteFieldPCA);
+  const int fieldCaptureDurationMs = isPCA ? 10000 : 5000;
+  m_autoStopSecondsRemaining = isPCA ? 10 : 5;
+  m_pcaFrameTarget = isPCA ? 100 : 0;
 
   QString fieldLabel;
   switch (ft) {
-  case AcquisitionWorker::FieldType::WhiteField: fieldLabel = "white field"; break;
-  case AcquisitionWorker::FieldType::DarkField:  fieldLabel = "dark field";  break;
-  case AcquisitionWorker::FieldType::DotGrid:    fieldLabel = "dot grid";    break;
-  case AcquisitionWorker::FieldType::Ambient:    fieldLabel = "ambient";     break;
+  case AcquisitionWorker::FieldType::WhiteField:    fieldLabel = "white field";            break;
+  case AcquisitionWorker::FieldType::WhiteFieldPCA: fieldLabel = "white field multi-frame"; break;
+  case AcquisitionWorker::FieldType::DarkField:     fieldLabel = "dark field";             break;
+  case AcquisitionWorker::FieldType::DotGrid:       fieldLabel = "dot grid";               break;
+  case AcquisitionWorker::FieldType::Ambient:       fieldLabel = "ambient";                break;
   case AcquisitionWorker::FieldType::Custom:
     fieldLabel = m_sessionNameEdit->text().trimmed();
     break;
   default: fieldLabel = "field"; break;
   }
 
-  m_stopButton->setText("Stop (auto 5s)");
-  m_stopButton->setToolTip(
-      QString("Field capture runs for 5 seconds and stops automatically.\n"
-              "Click to stop earlier."));
+  if (isPCA) {
+    m_stopButton->setText("Stop (auto 100f)");
+    m_stopButton->setToolTip(
+        "Multi-frame capture stops automatically after 100 frames are averaged.\n"
+        "Click to stop earlier.");
+  } else {
+    m_stopButton->setText("Stop (auto 5s)");
+    m_stopButton->setToolTip(
+        "Field capture runs for 5 seconds and stops automatically.\n"
+        "Click to stop earlier.");
+  }
   m_stopButton->setStyleSheet(
       "QPushButton { background-color: #E65100; color: white; font-weight: "
       "bold; "
