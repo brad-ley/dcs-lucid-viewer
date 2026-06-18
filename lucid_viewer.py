@@ -2385,6 +2385,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             f'{e*100:.1f}%' for e in explained[:min(3, n_stored)])
         self.corr_status_lbl.setText(f'PCA ✓  {n_stored} comp, top 3: {ev_str}')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+        self.statusBar().clearMessage()
         self.white_chk.setToolTip(
             f'Using: {os.path.basename(folder)}\n'
             f'Path: {folder}\n\n'
@@ -2394,11 +2395,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _on_pca_progress(self, msg):
         self.corr_status_lbl.setText(msg)
-        self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+        self.corr_status_lbl.setStyleSheet('color: #aaa; font-size: 10px;')
+        self.statusBar().showMessage(msg)
 
     def _on_pca_error(self, msg):
         self.corr_status_lbl.setText(f'PCA error: {msg}')
         self.corr_status_lbl.setStyleSheet('color: #ff6b6b; font-size: 10px;')
+        self.statusBar().clearMessage()
         self.white_chk.blockSignals(True)
         self.white_chk.setChecked(False)
         self.white_chk.blockSignals(False)
@@ -2517,8 +2520,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         d_c    = f.ravel() - mu
         coeffs = comp[:n] @ d_c
         bg     = (mu + comp[:n].T @ coeffs).reshape(frame.shape)
-        bg     = np.where(bg >= np.float32(1.0), bg, np.float32(1.0))
-        return (f / bg).astype(np.float32)
+        # Floor bad/near-zero background pixels at half the per-pixel mean so that
+        # pixels the PCA model reconstructs poorly don't cause extreme ratios.
+        bg_floor = np.maximum(mu.reshape(frame.shape) * np.float32(0.5), np.float32(1.0))
+        np.maximum(bg, bg_floor, out=bg)
+        return np.clip(f / bg, np.float32(0.0), np.float32(10.0))
 
     def _select_white_folder(self):
         """File menu: let user manually choose a white field folder."""
