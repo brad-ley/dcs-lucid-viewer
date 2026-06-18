@@ -546,6 +546,57 @@ def _field_correct_float(frame, dark, white,
     return out.astype(np.float32)
 
 
+def _compute_pca_from_frames(frames, n_components=20):
+    """
+    PCA on a list of (H, W) float32 frames using the frame-space covariance
+    trick (avoids the large N×N pixel-space matrix when K << N).
+    Returns (mean, components, explained_variance_ratio).
+      mean:       (H*W,) float32
+      components: (n_out, H*W) float32
+      explained:  (n_out,) float32
+    """
+    K = len(frames)
+    if K < 2:
+        raise ValueError('PCA requires at least 2 white-field frames.')
+    H, W = frames[0].shape
+    N = H * W
+    n_components = min(n_components, K - 1)
+
+    # Incremental mean
+    mu = np.zeros(N, dtype=np.float64)
+    for f in frames:
+        mu += f.ravel().astype(np.float64)
+    mu /= K
+    mu32 = mu.astype(np.float32)
+
+    # Centered frame matrix (K, N) float32
+    X_c = np.empty((K, N), dtype=np.float32)
+    for i, f in enumerate(frames):
+        np.subtract(f.ravel(), mu32, out=X_c[i])
+
+    # Frame-space covariance C = X_c @ X_c.T / (K-1)
+    # float32 matmul then cast to float64 for stable eigh
+    C = (X_c @ X_c.T).astype(np.float64) / max(K - 1, 1)
+
+    eigenvalues, eigenvectors = np.linalg.eigh(C)  # ascending
+    order = np.argsort(eigenvalues)[::-1]
+    eigenvalues = eigenvalues[order]
+    eigenvectors = eigenvectors[:, order]  # (K, K)
+
+    # Pixel-space components: v_i = X_c.T @ e_i / ||X_c.T @ e_i||
+    components = np.empty((n_components, N), dtype=np.float32)
+    for i in range(n_components):
+        v = X_c.T @ eigenvectors[:, i].astype(np.float32)  # (N,)
+        norm = float(np.linalg.norm(v))
+        if norm > 1e-10:
+            v /= norm
+        components[i] = v
+
+    total_var = float(max(eigenvalues[eigenvalues > 0].sum(), 1e-12))
+    explained = (eigenvalues[:n_components] / total_var).astype(np.float32)
+    return mu32, components, explained
+
+
 # ── TIFF export worker ────────────────────────────────────────────────────────
 
 class TiffExportWorker(QThread):
@@ -558,7 +609,8 @@ class TiffExportWorker(QThread):
                  dark_field, dark_field_gain,
                  white_field, white_field_gain,
                  gains, desc, bigtiff, compression='None', pixel_bits=16,
-                 timestamps=None, ts_unit='s', trigger_t0=None, imagej=False):
+                 timestamps=None, ts_unit='s', trigger_t0=None, imagej=False,
+                 pca_mean=None, pca_components=None, pca_n_components=5):
         super().__init__()
         self._out_path         = out_path
         self._reader           = reader
@@ -577,6 +629,9 @@ class TiffExportWorker(QThread):
         self._ts_unit          = ts_unit
         self._trigger_t0       = trigger_t0
         self._imagej           = imagej
+        self._pca_mean         = pca_mean
+        self._pca_components   = pca_components
+        self._pca_n_components = pca_n_components
         self._cancelled        = False
 
     def cancel(self):
@@ -584,6 +639,21 @@ class TiffExportWorker(QThread):
 
     def _corrected_float(self, frame, data_gain):
         """Float32 x-ray transmission for a frame, or None if no correction."""
+        if self._pca_mean is not None and self._pca_components is not None:
+            mu   = self._pca_mean
+            comp = self._pca_components
+            n    = min(self._pca_n_components, comp.shape[0])
+            f = frame.astype(np.float32)
+            dark = self._dark_field
+            if dark is not None and data_gain is not None and self._dark_field_gain is not None:
+                dark = dark * np.float32(10 ** ((data_gain - self._dark_field_gain) / 20.0))
+            if dark is not None:
+                f = f - dark
+            d_c        = f.ravel() - mu
+            coeffs     = comp[:n] @ d_c
+            bg         = (mu + comp[:n].T @ coeffs).reshape(frame.shape)
+            bg         = np.where(bg >= np.float32(1.0), bg, np.float32(1.0))
+            return (f / bg).astype(np.float32)
         return _field_correct_float(
             frame, self._dark_field, self._white_field,
             self._dark_field_gain, self._white_field_gain, data_gain,
@@ -650,7 +720,8 @@ class TiffExportWorker(QThread):
             # ImageJ mode requires contiguous=True, which is incompatible with compression
             imagej_write_kwargs = {}
 
-            corr_active = (self._dark_field is not None or self._white_field is not None)
+            corr_active = (self._dark_field is not None or self._white_field is not None
+                           or (self._pca_mean is not None and self._pca_components is not None))
             code_max    = int((1 << self._pixel_bits) - 1)
             self.phase.emit('Exporting')
 
@@ -742,6 +813,23 @@ class TiffExportWorker(QThread):
                 f'Exported {n} frames → {os.path.basename(self._out_path)}')
         except Exception as exc:
             self.export_error.emit(str(exc))
+
+
+class PcaComputeWorker(QThread):
+    pca_done  = pyqtSignal(object, object, object)  # mean, components, explained
+    pca_error = pyqtSignal(str)
+
+    def __init__(self, frames, n_components=20, parent=None):
+        super().__init__(parent)
+        self._frames       = frames
+        self._n_components = n_components
+
+    def run(self):
+        try:
+            mu, comp, expl = _compute_pca_from_frames(self._frames, self._n_components)
+            self.pca_done.emit(mu, comp, expl)
+        except Exception as exc:
+            self.pca_error.emit(str(exc))
 
 
 TIFF_COMPRESSIONS = ['None', 'LZW', 'Deflate', 'ZSTD']
@@ -1027,6 +1115,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._white_field       = None   # float32 (H, W) averaged white frame, or None
         self._white_field_gain  = None   # float, average gain (dB) the white was captured at
         self._white_field_error = None   # str error message, or None
+        self._white_mode        = 'none' # 'none' | 'flat' | 'pca'
+        self._pca_mean          = None   # (H*W,) float32 mean of white frames
+        self._pca_components    = None   # (n_stored, H*W) float32 eigenvectors
+        self._pca_shape         = None   # (H, W) for which PCA was computed
+        self._pca_folder        = None   # folder path used for cached PCA
+        self._pca_n_components  = 5      # number of components to use for correction
+        self._pca_worker        = None   # PcaComputeWorker while computing
+        self._stored_field_refs = {}     # field_references loaded from sidecar
         self._play_timer        = None   # QTimer driving playback
         self._play_start_wall   = 0.0    # time.monotonic() when play started
         self._play_start_ts_idx = 0      # frame index at play start
@@ -1171,21 +1267,41 @@ class LucidViewer(ViewerMixin, QMainWindow):
         corr_grid = QGridLayout(corr_box)
         corr_grid.setSpacing(4)
         self.dark_chk  = QCheckBox('Dark field')
-        self.white_chk = QCheckBox('White field')
         self.dark_chk.setToolTip(
             'Finds most recent dark_field_* folder in parent directory\n'
             'and averages all frames as the dark reference.'
         )
-        self.white_chk.setToolTip(
-            'Finds most recent white_field_* folder in parent directory\n'
-            'and averages all frames as the white reference.'
+        self.white_combo = QComboBox()
+        self.white_combo.addItems(['None', 'Flat field', 'PCA removal'])
+        self.white_combo.setToolTip(
+            'None: no white-field correction\n'
+            'Flat field: divide by averaged white-field frames\n'
+            'PCA removal: project each frame onto a PCA basis built from white-field\n'
+            '  frames and subtract the estimated background\n\n'
+            'Disabled options mean no compatible white_field folder was found.'
         )
+        self._pca_n_lbl = QLabel('N components:')
+        self._pca_n_lbl.setVisible(False)
+        self.pca_n_spin = QSpinBox()
+        self.pca_n_spin.setRange(1, 20)
+        self.pca_n_spin.setValue(5)
+        self.pca_n_spin.setToolTip('Number of PCA components to subtract (1–20)')
+        self.pca_n_spin.setVisible(False)
         self.corr_status_lbl = QLabel('')
         self.corr_status_lbl.setWordWrap(True)
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
-        corr_grid.addWidget(self.dark_chk,        0, 0, 1, 2)
-        corr_grid.addWidget(self.white_chk,       1, 0, 1, 2)
-        corr_grid.addWidget(self.corr_status_lbl, 2, 0, 1, 2)
+        self.store_fields_btn = QPushButton('Store')
+        self.store_fields_btn.setToolTip(
+            'Save current dark/white field selection to this file\'s sidecar JSON.\n'
+            'On next open the same fields will be loaded automatically.')
+        self.store_fields_btn.setEnabled(False)
+        corr_grid.addWidget(self.dark_chk,          0, 0, 1, 2)
+        corr_grid.addWidget(QLabel('White field:'),  1, 0)
+        corr_grid.addWidget(self.white_combo,        1, 1)
+        corr_grid.addWidget(self._pca_n_lbl,         2, 0)
+        corr_grid.addWidget(self.pca_n_spin,         2, 1)
+        corr_grid.addWidget(self.corr_status_lbl,    3, 0)
+        corr_grid.addWidget(self.store_fields_btn,   3, 1)
         sb.addWidget(corr_box)
 
         sb.addStretch()
@@ -1246,7 +1362,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.imview.roi.sigRegionChangeFinished.connect(self._on_roi_moved)
         self.mask_chk.toggled.connect(self._toggle_mask)
         self.dark_chk.toggled.connect(self._toggle_dark_field)
-        self.white_chk.toggled.connect(self._toggle_white_field)
+        self.white_combo.currentIndexChanged.connect(self._on_white_mode_changed)
+        self.pca_n_spin.valueChanged.connect(self._on_pca_n_changed)
+        self.store_fields_btn.clicked.connect(self._store_field_refs)
 
         self.play_btn.clicked.connect(self._toggle_play)
 
@@ -1273,6 +1391,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _apply_hints(self, path: str):
         """Apply metadata from .json sidecar first, fall back to filename heuristics."""
+        self._stored_field_refs = {}
         sidecar, self._sidecar_status = _load_sidecar(path)
 
         w   = sidecar.get('width')
@@ -1282,6 +1401,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._sidecar_fps         = sidecar.get('fps')
         self._sidecar_acq_time    = sidecar.get('acquisition_time', '')
         self._sidecar_notes       = sidecar.get('notes', '')
+        self._stored_field_refs   = sidecar.get('field_references', {})
         self._timestamps, self._ts_unit, self._gains, self._exposures, self._line_statuses = _load_timestamps(path)
 
         # Fall back to filename hint for pixel format if sidecar didn't provide it
@@ -1343,24 +1463,31 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._reader = reader
         self._cache  = {}
 
-        # If the filename already encodes baked-in correction, disable BOTH
-        # checkboxes — (data-dark)/(white-dark) is non-commutative so applying
-        # either step again on an already-corrected file would be wrong.
+        # If the filename already encodes baked-in correction, disable controls —
+        # (data-dark)/(white-dark) is non-commutative so re-applying would be wrong.
         stem_lower = os.path.splitext(os.path.basename(path))[0].lower()
         any_baked  = '_dark' in stem_lower or '_white' in stem_lower
-        for chk, attr_field, attr_gain in [
-            (self.dark_chk,  '_dark_field',  '_dark_field_gain'),
-            (self.white_chk, '_white_field', '_white_field_gain'),
-        ]:
-            chk.blockSignals(True)
-            if any_baked:
-                chk.setChecked(False)
-                chk.setEnabled(False)
-                setattr(self, attr_field, None)
-                setattr(self, attr_gain,  None)
-            else:
-                chk.setEnabled(True)
-            chk.blockSignals(False)
+        self.dark_chk.blockSignals(True)
+        if any_baked:
+            self.dark_chk.setChecked(False)
+            self.dark_chk.setEnabled(False)
+            self._dark_field      = None
+            self._dark_field_gain = None
+        else:
+            self.dark_chk.setEnabled(True)
+        self.dark_chk.blockSignals(False)
+        self.white_combo.blockSignals(True)
+        if any_baked:
+            self.white_combo.setCurrentIndex(0)
+            self.white_combo.setEnabled(False)
+            self._white_field       = None
+            self._white_field_gain  = None
+            self._white_mode        = 'none'
+            self._pca_mean          = None
+            self._pca_components    = None
+        else:
+            self.white_combo.setEnabled(True)
+        self.white_combo.blockSignals(False)
 
         self.mask_chk.blockSignals(True)
         if any_baked:
@@ -1378,6 +1505,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
             )
         self.mask_chk.blockSignals(False)
 
+        if not any_baked:
+            self._check_white_options()
+            self._apply_stored_field_refs()
         self._reload_fields()
         n = len(reader)
 
@@ -1597,34 +1727,94 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._mask_item.setImage(rgba, autoLevels=False)
 
     # ── Field correction ──────────────────────────────────────────────────────
-    def _find_field_folder(self, keyword: str):
-        """Return path to most-recent folder whose name contains keyword, or None."""
-        if not self._path:
-            print(f'[field] _path is None, aborting search for {keyword!r}')
+    def _field_folder_shape(self, folder: str):
+        """Peek at first image file in folder; return (w, h) or None if unknown."""
+        try:
+            files = sorted(os.listdir(folder))
+        except OSError:
             return None
+        raw_files = [f for f in files if os.path.splitext(f)[1].lower() == '.raw']
+        tif_files = [f for f in files
+                     if os.path.splitext(f)[1].lower() in ('.tiff', '.tif')]
+        first = (raw_files or tif_files or [None])[0]
+        if first is None:
+            return None
+        fpath = os.path.join(folder, first)
+        ext   = os.path.splitext(first)[1].lower()
+        if ext == '.raw':
+            sc, _ = _load_sidecar(fpath)
+            w = sc.get('width') or sc.get('Width')
+            h = sc.get('height') or sc.get('Height')
+            if w and h:
+                return (int(w), int(h))
+            return None
+        try:
+            import tifffile
+            with tifffile.TiffFile(fpath) as tf:
+                s = tf.series[0].shape if tf.series else None
+                if s is not None:
+                    if len(s) == 2:
+                        return (s[1], s[0])   # (w, h)
+                    if len(s) >= 3:
+                        return (s[-1], s[-2])
+                page = tf.pages[0]
+                return (page.shape[1], page.shape[0])
+        except Exception:
+            return None
+
+    def _find_field_folder(self, keyword: str):
+        """Return path to best shape-matching folder whose name contains keyword.
+
+        Priority: (1) stored sidecar ref if path exists and shape matches,
+                  (2) most-recent chronological match with matching shape,
+                  (3) most-recent chronological match with unknown shape,
+                  (4) None.
+        """
+        if not self._path:
+            return None
+
+        tw = self._reader.w if self._reader else self.w_spin.value()
+        th = self._reader.h if self._reader else self.h_spin.value()
+
+        # --- stored sidecar reference ---
+        refs = self._stored_field_refs or {}
+        stored = refs.get('dark_folder' if 'dark' in keyword else 'white_folder')
+        if stored and os.path.isdir(stored):
+            shape = self._field_folder_shape(stored)
+            if shape is None or shape == (tw, th):
+                return stored
+            print(f'[field] stored ref {stored!r} shape {shape} != target {(tw,th)}, ignoring')
+
+        # --- chronological search ---
         parent = os.path.dirname(self._path)
         for search_dir in [parent, os.path.dirname(parent)]:
-            print(f'[field] searching {search_dir!r} for {keyword!r}')
             if not os.path.isdir(search_dir):
-                print(f'[field]   not a directory, skipping')
                 continue
             try:
                 all_entries = os.listdir(search_dir)
-            except OSError as e:
-                print(f'[field]   listdir error: {e}')
+            except OSError:
                 continue
-            matches = sorted(
+            candidates = sorted(
                 [d for d in all_entries
                  if keyword in d and os.path.isdir(os.path.join(search_dir, d))],
                 reverse=True,
             )
-            print(f'[field]   all entries: {all_entries}')
-            print(f'[field]   matches: {matches}')
-            if matches:
-                result = os.path.join(search_dir, matches[0])
-                print(f'[field]   found: {result!r}')
+            shape_match  = None
+            unknown_shape = None
+            for name in candidates:
+                folder = os.path.join(search_dir, name)
+                shape  = self._field_folder_shape(folder)
+                if shape is None:
+                    if unknown_shape is None:
+                        unknown_shape = folder
+                elif shape == (tw, th):
+                    shape_match = folder
+                    break
+                else:
+                    print(f'[field] skipping {name!r}: shape {shape} != {(tw,th)}')
+            result = shape_match or unknown_shape
+            if result:
                 return result
-        print(f'[field] no match found for {keyword!r}')
         return None
 
     def _load_field_frame(self, folder: str):
@@ -1766,48 +1956,417 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._refresh_corr_status()
         self._refresh_current_frame()
 
-    def _toggle_white_field(self, checked: bool):
-        if not checked:
+    def _on_white_mode_changed(self, index):
+        """Handle white field combo selection (0=None, 1=Flat field, 2=PCA removal)."""
+        if index == 0:
+            self._white_mode        = 'none'
             self._white_field       = None
             self._white_field_gain  = None
             self._white_field_error = None
+            self._pca_mean          = None
+            self._pca_components    = None
+            self._pca_n_lbl.setVisible(False)
+            self.pca_n_spin.setVisible(False)
             self._refresh_corr_status()
             self._refresh_current_frame()
-            return
-        if not self._path:
-            self.white_chk.setChecked(False)
-            return
+
+        elif index == 1:
+            self._pca_n_lbl.setVisible(False)
+            self.pca_n_spin.setVisible(False)
+            if not self._path:
+                self.white_combo.blockSignals(True)
+                self.white_combo.setCurrentIndex(0)
+                self.white_combo.blockSignals(False)
+                return
+            folder = self._find_field_folder('white_field')
+            if folder is None:
+                self.corr_status_lbl.setText('white_field folder not found')
+                self.white_combo.blockSignals(True)
+                self.white_combo.setCurrentIndex(0)
+                self.white_combo.blockSignals(False)
+                return
+            self._white_field = self._load_field_frame(folder)
+            if self._white_field is None:
+                self.corr_status_lbl.setText('White field: no frames loaded')
+                self.white_combo.blockSignals(True)
+                self.white_combo.setCurrentIndex(0)
+                self.white_combo.blockSignals(False)
+                return
+            self._white_field_gain  = self._read_average_gain(folder)
+            self._white_field_error = self._check_field_shape(self._white_field, 'white')
+            self._white_mode        = 'flat'
+            self._pca_mean          = None
+            self._pca_components    = None
+            self._refresh_corr_status()
+            self._refresh_current_frame()
+
+        elif index == 2:
+            self._pca_n_lbl.setVisible(True)
+            self.pca_n_spin.setVisible(True)
+            if not self._path:
+                self.white_combo.blockSignals(True)
+                self.white_combo.setCurrentIndex(0)
+                self.white_combo.blockSignals(False)
+                return
+            self._white_field       = None
+            self._white_field_gain  = None
+            self._white_field_error = None
+            self._compute_or_load_pca()
+
+    def _on_pca_n_changed(self, value):
+        self._pca_n_components = value
+        if self._white_mode == 'pca' and self._pca_components is not None:
+            self._refresh_current_frame()
+
+    def _check_white_options(self):
+        """Enable or disable combo items based on what white_field data is available."""
+        flat_ok = pca_ok = False
+        if self._reader is not None:
+            folder = self._find_field_folder('white_field')
+            if folder:
+                n_frames = self._count_white_field_frames(folder)
+                flat_ok = n_frames >= 1
+                pca_ok  = n_frames >= 2
+
+        model = self.white_combo.model()
+        for i, enabled in enumerate([True, flat_ok, pca_ok]):
+            item = model.item(i)
+            if enabled:
+                item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+            else:
+                item.setFlags(Qt.ItemFlag.ItemIsSelectable)
+
+        cur = self.white_combo.currentIndex()
+        if (cur == 1 and not flat_ok) or (cur == 2 and not pca_ok):
+            self.white_combo.blockSignals(True)
+            self.white_combo.setCurrentIndex(0)
+            self.white_combo.blockSignals(False)
+            self._on_white_mode_changed(0)
+
+    def _count_white_field_frames(self, folder):
+        """Estimate total frame count in folder without loading pixel data."""
+        try:
+            all_files = sorted(os.listdir(folder))
+        except OSError:
+            return 0
+        raw_files = [f for f in all_files if f.lower().endswith('.raw')]
+        tif_files = [f for f in all_files if f.lower().endswith(('.tiff', '.tif'))]
+        files = raw_files if raw_files else tif_files
+        if not files:
+            return 0
+        default_fmt = self.fmt_combo.currentText()
+        default_w   = self._reader.w if self._reader else self.w_spin.value()
+        default_h   = self._reader.h if self._reader else self.h_spin.value()
+        total = 0
+        for fname in files:
+            fpath = os.path.join(folder, fname)
+            ext   = os.path.splitext(fname)[1].lower()
+            if ext == '.raw':
+                sidecar, _ = _load_sidecar(fpath)
+                fmt = sidecar.get('pixel_format') or sidecar.get('pixelformat') or default_fmt
+                w   = int(sidecar.get('width',  default_w))
+                h   = int(sidecar.get('height', default_h))
+                try:
+                    bpf   = frame_byte_count(fmt, w, h)
+                    fsize = os.path.getsize(fpath)
+                    total += max(1, int(fsize // bpf))
+                except Exception:
+                    total += 1
+            elif ext in ('.tiff', '.tif'):
+                try:
+                    import tifffile
+                    with tifffile.TiffFile(fpath) as tf:
+                        s = tf.series[0].shape if tf.series else None
+                        if s is not None:
+                            total += s[0] if len(s) > 2 else 1
+                        else:
+                            total += len(tf.pages)
+                except Exception:
+                    total += 1
+        return total
+
+    def _load_all_field_frames(self, folder):
+        """Load every frame from folder as individual float32 arrays (for PCA)."""
+        try:
+            all_files = sorted(os.listdir(folder))
+        except OSError:
+            return []
+        raw_files = [f for f in all_files if os.path.splitext(f)[1].lower() == '.raw']
+        tif_files = [f for f in all_files
+                     if os.path.splitext(f)[1].lower() in ('.tiff', '.tif')]
+        files = raw_files if raw_files else tif_files
+        if not files:
+            return []
+
+        default_fmt = self.fmt_combo.currentText()
+        default_w   = self.w_spin.value()
+        default_h   = self.h_spin.value()
+        frames = []
+        for fname in files:
+            fpath = os.path.join(folder, fname)
+            ext   = os.path.splitext(fname)[1].lower()
+            try:
+                if ext == '.raw':
+                    sidecar, _ = _load_sidecar(fpath)
+                    fmt = (sidecar.get('pixel_format')
+                           or sidecar.get('pixelformat') or default_fmt)
+                    w = int(sidecar.get('width',  default_w))
+                    h = int(sidecar.get('height', default_h))
+                    r = RawReader(fpath, fmt, w, h)
+                    for i in range(len(r)):
+                        frames.append(r[i].astype(np.float32))
+                    r.close()
+                elif ext in ('.tiff', '.tif'):
+                    import tifffile
+                    data = tifffile.imread(fpath)
+                    if data.ndim == 2:
+                        frames.append(data.astype(np.float32))
+                    else:
+                        for i in range(data.shape[0]):
+                            frames.append(data[i].astype(np.float32))
+            except Exception as e:
+                print(f'[pca] error loading {fname}: {e}')
+        return frames
+
+    def _pca_cache_path(self, folder, h, w):
+        return os.path.join(folder, f'pca_cache_{h}x{w}.npz')
+
+    def _pca_cache_valid(self, cache_path, folder):
+        """True if cache file exists and is newer than all source files in folder."""
+        if not os.path.isfile(cache_path):
+            return False
+        cache_mtime = os.path.getmtime(cache_path)
+        try:
+            for fname in os.listdir(folder):
+                if os.path.splitext(fname)[1].lower() in ('.raw', '.tiff', '.tif'):
+                    if os.path.getmtime(os.path.join(folder, fname)) > cache_mtime:
+                        return False
+        except OSError:
+            return False
+        return True
+
+    def _compute_or_load_pca(self):
+        """Load cached PCA basis or compute from white_field frames (async)."""
         folder = self._find_field_folder('white_field')
         if folder is None:
             self.corr_status_lbl.setText('white_field folder not found')
-            self.white_chk.blockSignals(True)
-            self.white_chk.setChecked(False)
-            self.white_chk.blockSignals(False)
+            self.white_combo.blockSignals(True)
+            self.white_combo.setCurrentIndex(0)
+            self.white_combo.blockSignals(False)
             return
-        self._white_field = self._load_field_frame(folder)
-        if self._white_field is None:
-            self.corr_status_lbl.setText('White field: no frames loaded')
-            self.white_chk.blockSignals(True)
-            self.white_chk.setChecked(False)
-            self.white_chk.blockSignals(False)
+
+        h = self._reader.h if self._reader else self.h_spin.value()
+        w = self._reader.w if self._reader else self.w_spin.value()
+        cache_path = self._pca_cache_path(folder, h, w)
+
+        if self._pca_cache_valid(cache_path, folder):
+            try:
+                data = np.load(cache_path)
+                mean = data['mean']
+                comp = data['components']
+                if mean.shape[0] == h * w:
+                    self._pca_mean       = mean
+                    self._pca_components = comp
+                    self._pca_shape      = (h, w)
+                    self._pca_folder     = folder
+                    self._white_mode     = 'pca'
+                    n_stored = comp.shape[0]
+                    try:
+                        ev_str = ', '.join(
+                            f'{e*100:.1f}%' for e in data['explained'][:min(3, n_stored)])
+                    except Exception:
+                        ev_str = '?'
+                    self.corr_status_lbl.setText(
+                        f'PCA ✓  {n_stored} comp cached, top 3: {ev_str}')
+                    self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+                    self._refresh_current_frame()
+                    return
+            except Exception as exc:
+                print(f'[pca] cache load error: {exc}')
+
+        # Load all frames then compute asynchronously
+        self.corr_status_lbl.setText('Loading white field frames for PCA…')
+        self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+        frames = self._load_all_field_frames(folder)
+        if len(frames) < 2:
+            self.corr_status_lbl.setText('PCA: need ≥2 white-field frames')
+            self.white_combo.blockSignals(True)
+            self.white_combo.setCurrentIndex(0)
+            self.white_combo.blockSignals(False)
+            self._on_white_mode_changed(0)
             return
-        self._white_field_gain  = self._read_average_gain(folder)
-        self._white_field_error = self._check_field_shape(self._white_field, 'white')
-        self._refresh_corr_status()
+
+        K = len(frames)
+        mem_gb = K * h * w * 4 / 1e9
+        self.corr_status_lbl.setText(
+            f'Computing PCA ({K} frames, ~{mem_gb:.1f} GB)…')
+        n_store = min(20, K - 1)
+        if self._pca_worker is not None:
+            self._pca_worker.pca_done.disconnect()
+            self._pca_worker.pca_error.disconnect()
+            self._pca_worker.quit()
+        self._pca_worker = PcaComputeWorker(frames, n_components=n_store, parent=self)
+        self._pca_worker.pca_done.connect(
+            lambda mu, comp, expl, _cp=cache_path, _f=folder:
+                self._on_pca_computed(mu, comp, expl, _cp, _f)
+        )
+        self._pca_worker.pca_error.connect(self._on_pca_error)
+        self._pca_worker.start()
+
+    def _on_pca_computed(self, mean, components, explained, cache_path, folder):
+        if self._white_mode != 'pca':
+            return
+        self._pca_mean       = mean
+        self._pca_components = components
+        self._pca_shape      = (self._reader.h, self._reader.w) if self._reader else None
+        self._pca_folder     = folder
+        try:
+            np.savez_compressed(cache_path,
+                                mean=mean, components=components, explained=explained)
+        except Exception as exc:
+            print(f'[pca] cache save error: {exc}')
+        n_stored = components.shape[0]
+        ev_str = ', '.join(
+            f'{e*100:.1f}%' for e in explained[:min(3, n_stored)])
+        self.corr_status_lbl.setText(f'PCA ✓  {n_stored} comp, top 3: {ev_str}')
+        self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
         self._refresh_current_frame()
 
+    def _on_pca_error(self, msg):
+        self.corr_status_lbl.setText(f'PCA error: {msg}')
+        self.corr_status_lbl.setStyleSheet('color: #ff6b6b; font-size: 10px;')
+        self.white_combo.blockSignals(True)
+        self.white_combo.setCurrentIndex(0)
+        self.white_combo.blockSignals(False)
+        self._white_mode = 'none'
+
+    def _apply_stored_field_refs(self):
+        """If the current file's sidecar has stored field refs, auto-activate them."""
+        refs = self._stored_field_refs
+        if not refs:
+            return
+        tw = self._reader.w if self._reader else self.w_spin.value()
+        th = self._reader.h if self._reader else self.h_spin.value()
+
+        dark_folder  = refs.get('dark_folder')
+        white_folder = refs.get('white_folder')
+        white_mode   = refs.get('white_mode', 'none')
+
+        if dark_folder and os.path.isdir(dark_folder):
+            shape = self._field_folder_shape(dark_folder)
+            if shape is None or shape == (tw, th):
+                self.dark_chk.blockSignals(True)
+                self.dark_chk.setChecked(True)
+                self.dark_chk.blockSignals(False)
+
+        if white_folder and os.path.isdir(white_folder) and white_mode in ('flat', 'pca'):
+            shape = self._field_folder_shape(white_folder)
+            if shape is None or shape == (tw, th):
+                mode_idx = 1 if white_mode == 'flat' else 2
+                # Verify that this mode is currently enabled in the combo
+                model = self.white_combo.model()
+                item  = model.item(mode_idx)
+                if item and (item.flags() & Qt.ItemFlag.ItemIsEnabled):
+                    self.white_combo.blockSignals(True)
+                    self.white_combo.setCurrentIndex(mode_idx)
+                    self.white_combo.blockSignals(False)
+                    self._pca_n_lbl.setVisible(mode_idx == 2)
+                    self.pca_n_spin.setVisible(mode_idx == 2)
+
+    def _get_or_create_sidecar_path(self):
+        """Return best sidecar path: existing one if found, else <stem>.json."""
+        stem = os.path.splitext(self._path)[0]
+        for candidate in [self._path + '.json', stem + '.json']:
+            if os.path.isfile(candidate):
+                return candidate
+        return stem + '.json'
+
+    def _store_field_refs(self):
+        """Write currently active field folder paths into this file's sidecar JSON."""
+        if not self._path:
+            return
+
+        refs = {}
+        if self.dark_chk.isChecked() and self._dark_field is not None:
+            folder = self._find_field_folder('dark_field')
+            if folder:
+                refs['dark_folder'] = folder
+
+        if self._white_mode == 'flat' and self._white_field is not None:
+            folder = self._find_field_folder('white_field')
+            if folder:
+                refs['white_folder'] = folder
+                refs['white_mode']   = 'flat'
+        elif self._white_mode == 'pca' and self._pca_components is not None:
+            if self._pca_folder:
+                refs['white_folder'] = self._pca_folder
+                refs['white_mode']   = 'pca'
+
+        if not refs:
+            self.corr_status_lbl.setText('Nothing to store — no correction active')
+            self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+            return
+
+        sidecar_path = self._get_or_create_sidecar_path()
+        try:
+            existing = {}
+            if os.path.isfile(sidecar_path):
+                for enc in ('utf-8-sig', 'utf-16', 'latin-1'):
+                    try:
+                        with open(sidecar_path, 'r', encoding=enc) as fh:
+                            existing = json.load(fh)
+                        break
+                    except (UnicodeDecodeError, UnicodeError):
+                        continue
+            existing['field_references'] = refs
+            with open(sidecar_path, 'w', encoding='utf-8') as fh:
+                json.dump(existing, fh, indent=2)
+            self._stored_field_refs = refs
+            self.corr_status_lbl.setText(
+                f'Stored → {os.path.basename(sidecar_path)}')
+            self.corr_status_lbl.setStyleSheet('color: #6bcf7f; font-size: 10px;')
+        except Exception as exc:
+            self.corr_status_lbl.setText(f'Store error: {exc}')
+            self.corr_status_lbl.setStyleSheet('color: #ff6b6b; font-size: 10px;')
+
+    def _apply_pca_correction_frame(self, frame, dark=None):
+        """Subtract PCA-estimated white-field background; return float32 transmission."""
+        mu   = self._pca_mean
+        comp = self._pca_components
+        n    = min(self._pca_n_components, comp.shape[0])
+        f = frame.astype(np.float32)
+        if dark is not None:
+            f = f - dark
+        d_c    = f.ravel() - mu
+        coeffs = comp[:n] @ d_c
+        bg     = (mu + comp[:n].T @ coeffs).reshape(frame.shape)
+        bg     = np.where(bg >= np.float32(1.0), bg, np.float32(1.0))
+        return (f / bg).astype(np.float32)
+
     def _reload_fields(self):
-        """Reload whichever field references are currently checked for the new file."""
+        """Reload whichever field references are currently selected for the new file."""
         if self.dark_chk.isChecked():
             folder = self._find_field_folder('dark_field')
             self._dark_field       = self._load_field_frame(folder) if folder else None
             self._dark_field_gain  = self._read_average_gain(folder) if folder else None
             self._dark_field_error = self._check_field_shape(self._dark_field, 'dark')
-        if self.white_chk.isChecked():
+
+        mode_idx = self.white_combo.currentIndex()
+        if mode_idx == 1:
             folder = self._find_field_folder('white_field')
             self._white_field       = self._load_field_frame(folder) if folder else None
             self._white_field_gain  = self._read_average_gain(folder) if folder else None
             self._white_field_error = self._check_field_shape(self._white_field, 'white')
+            self._white_mode        = 'flat'
+        elif mode_idx == 2:
+            self._compute_or_load_pca()
+        else:
+            self._white_mode        = 'none'
+            self._white_field       = None
+            self._white_field_gain  = None
+            self._white_field_error = None
+            self._pca_mean          = None
+            self._pca_components    = None
         self._refresh_corr_status()
 
     def _check_field_shape(self, field, name: str):
@@ -1840,20 +2399,32 @@ class LucidViewer(ViewerMixin, QMainWindow):
         else:
             self.dark_chk.setToolTip(self._DARK_CHK_TIP)
 
-        if self._white_field is not None:
+        if self._white_mode == 'flat' and self._white_field is not None:
             if self._white_field_error:
                 parts.append('White ✗')
-                self.white_chk.setToolTip(f'{self._WHITE_CHK_TIP}\n\n⚠ {self._white_field_error}')
                 has_error = True
             else:
                 parts.append('White ✓')
-                self.white_chk.setToolTip(self._WHITE_CHK_TIP)
-        else:
-            self.white_chk.setToolTip(self._WHITE_CHK_TIP)
+        elif self._white_mode == 'pca':
+            if self._pca_components is not None:
+                parts.append(f'PCA ✓ (n={self._pca_n_components})')
+            else:
+                parts.append('PCA …')
 
-        self.corr_status_lbl.setText('  '.join(parts))
+        if parts:
+            self.corr_status_lbl.setText('  '.join(parts))
         color = '#ff6b6b' if has_error else '#888'
         self.corr_status_lbl.setStyleSheet(f'color: {color}; font-size: 10px;')
+
+        store_ok = (
+            self._path is not None and (
+                (self._dark_field is not None and not self._dark_field_error)
+                or (self._white_mode == 'flat' and self._white_field is not None
+                    and not self._white_field_error)
+                or (self._white_mode == 'pca' and self._pca_components is not None)
+            )
+        )
+        self.store_fields_btn.setEnabled(store_ok)
 
     def _refresh_current_frame(self):
         if self._reader is not None:
@@ -1867,6 +2438,18 @@ class LucidViewer(ViewerMixin, QMainWindow):
         true transmission values, not the 12-bit-mapped codes that get written
         to disk on export). With no correction the raw frame is returned.
         """
+        if self._white_mode == 'pca':
+            if self._pca_components is None or self._pca_mean is None:
+                return frame
+            dark = None
+            if self._dark_field is not None and not self._dark_field_error:
+                dark = self._dark_field.astype(np.float32)
+                if (data_gain is not None and self._dark_field_gain is not None
+                        and data_gain != self._dark_field_gain):
+                    dark = dark * np.float32(
+                        10 ** ((data_gain - self._dark_field_gain) / 20.0))
+            return self._apply_pca_correction_frame(frame, dark=dark)
+
         if self._dark_field is None and self._white_field is None:
             return frame
         if self._dark_field_error or self._white_field_error:
@@ -1956,7 +2539,12 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         base = os.path.splitext(self._path)[0] if self._path else ''
         cmp  = self._export_compression
-        if self._dark_field is not None and self._white_field is not None:
+        if self._white_mode == 'pca' and self._pca_components is not None:
+            if self._dark_field is not None:
+                field_suffix = '_dark_pca'
+            else:
+                field_suffix = '_pca'
+        elif self._dark_field is not None and self._white_field is not None:
             field_suffix = '_dark_white'
         elif self._dark_field is not None:
             field_suffix = '_dark'
@@ -2010,20 +2598,25 @@ class LucidViewer(ViewerMixin, QMainWindow):
             correction['dark_field'] = os.path.basename(dark_folder) if dark_folder else 'loaded'
             if self._dark_field_gain is not None:
                 correction['dark_field_gain_dB'] = self._dark_field_gain
-        if self._white_field is not None:
+        if self._white_mode == 'pca' and self._pca_components is not None:
+            correction['white_field_mode'] = 'pca'
+            correction['pca_n_components'] = self._pca_n_components
+            if self._pca_folder:
+                correction['pca_folder'] = os.path.basename(self._pca_folder)
+            correction['formula'] = 'transmission = data / pca_background'
+        elif self._white_field is not None:
             white_folder = self._find_field_folder('white_field')
             correction['white_field'] = os.path.basename(white_folder) if white_folder else 'loaded'
             if self._white_field_gain is not None:
                 correction['white_field_gain_dB'] = self._white_field_gain
-        if correction:
+        if correction and 'formula' not in correction:
             correction['formula'] = (
                 'transmission = (data - dark) / (white - dark)'
                 if self._dark_field is not None and self._white_field is not None
                 else 'corrected = data - dark' if self._dark_field is not None
                 else 'transmission = data / white'
             )
-            # transmission_min / transmission_max / code_max / decode are filled
-            # in per page by the export worker (one conversion factor per frame).
+        if correction:
             meta['correction'] = correction
 
         desc        = json.dumps(meta, indent=2)
@@ -2046,10 +2639,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 'via Bio-Formats, and the per-frame transmission factors are embedded '
                 'in each page of the TIFF (no sidecar needed).')
 
+        pca_mean  = self._pca_mean       if self._white_mode == 'pca' else None
+        pca_comp  = self._pca_components if self._white_mode == 'pca' else None
         worker = TiffExportWorker(
             out_path, self._reader, self._cache, n,
             self._dark_field,  self._dark_field_gain,
-            self._white_field, self._white_field_gain,
+            self._white_field if self._white_mode == 'flat' else None,
+            self._white_field_gain,
             self._gains, desc, use_bigtiff,
             compression=self._export_compression,
             pixel_bits=_FORMAT_BITS.get(self.fmt_combo.currentText(), 16),
@@ -2057,6 +2653,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
             ts_unit=self._ts_unit,
             trigger_t0=self._trigger_t0,
             imagej=imagej,
+            pca_mean=pca_mean,
+            pca_components=pca_comp,
+            pca_n_components=self._pca_n_components,
         )
         self._export_worker = worker
 
@@ -2143,7 +2742,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         s.setValue('colormap',      self.cmap_combo.currentText())
         s.setValue('mask_checked',        self.mask_chk.isChecked())
         s.setValue('dark_field_checked',  self.dark_chk.isChecked())
-        s.setValue('white_field_checked', self.white_chk.isChecked())
+        s.setValue('white_combo_index',   self.white_combo.currentIndex())
+        s.setValue('pca_n_components',    self.pca_n_spin.value())
         s.setValue('export_compression',  self._export_compression)
         s.setValue('trigger_bit',         self._trigger_bit)
 
@@ -2175,9 +2775,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.dark_chk.blockSignals(True)
         self.dark_chk.setChecked(s.value('dark_field_checked', False, type=bool))
         self.dark_chk.blockSignals(False)
-        self.white_chk.blockSignals(True)
-        self.white_chk.setChecked(s.value('white_field_checked', False, type=bool))
-        self.white_chk.blockSignals(False)
+        self.white_combo.blockSignals(True)
+        self.white_combo.setCurrentIndex(s.value('white_combo_index', 0, type=int))
+        self.white_combo.blockSignals(False)
+        self.pca_n_spin.setValue(s.value('pca_n_components', 5, type=int))
+        pca_idx_restored = self.white_combo.currentIndex()
+        self._pca_n_lbl.setVisible(pca_idx_restored == 2)
+        self.pca_n_spin.setVisible(pca_idx_restored == 2)
         last = s.value('last_path', '')
         if last:
             self.statusBar().showMessage(f'Last file: {last}')
@@ -2185,6 +2789,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
     def closeEvent(self, event):
         self._stop_play()
         self._save_settings()
+        if self._pca_worker is not None:
+            self._pca_worker.quit()
+            self._pca_worker.wait(2000)
         if self._export_worker is not None:
             self._export_worker.cancel()
             self._export_worker.wait()
