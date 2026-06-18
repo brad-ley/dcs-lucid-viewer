@@ -2549,16 +2549,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
             return
         basename = os.path.basename(folder)
         if error:
-            lbl.setText(f'⚠ {basename}')
+            lbl.setText('⚠ Dark')
             lbl.setStyleSheet('color: #cc8800; font-size: 10px;')
         else:
-            lbl.setText(f'✓ {basename}')
+            lbl.setText('✓ Dark')
             lbl.setStyleSheet('color: #66cc66; font-size: 10px;')
         tip = f'{basename}\nPath: {folder}'
         if error:
             tip += f'\n\n⚠ {error}'
-        else:
-            tip += '\n\nAverages all frames in this folder as the dark reference.'
         lbl.setToolTip(tip)
 
     def _set_white_field_info(self, folder=None, extra=''):
@@ -2571,10 +2569,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         basename = os.path.basename(folder)
         is_error = extra and not extra.startswith('master:')
         if is_error:
-            lbl.setText(f'⚠ {basename}')
+            lbl.setText('⚠ White')
             lbl.setStyleSheet('color: #cc8800; font-size: 10px;')
         else:
-            lbl.setText(f'✓ {basename}')
+            lbl.setText('✓ White')
             lbl.setStyleSheet('color: #66cc66; font-size: 10px;')
         tip = f'{basename}\nPath: {folder}'
         if extra:
