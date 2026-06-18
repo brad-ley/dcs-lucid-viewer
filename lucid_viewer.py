@@ -1742,6 +1742,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_blur_sigma        = 400   # Gaussian blur sigma for low-res pass (px)
         self._pca_universal             = False  # use master basis + cell-mean adaptation
         self._pca_master_folder         = ''     # path to master (no-cell) white field folder
+        self._pca_cell_folder           = ''     # path to cell-present white field folder (Universal PCA)
         self._pca_master_mean           = None   # (H*W,) float32 master no-cell mean
         self._pca_master_components     = None   # (n, H*W) float32 master eigenvectors
         self._pca_master_mean_low       = None   # (H*W,) float32 master blurred mean
@@ -1795,6 +1796,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         master_act = QAction('&Master Clean PCA…', self)
         master_act.triggered.connect(self._select_master_folder)
         white_menu.addAction(master_act)
+        cell_act = QAction('&Cell White Field (Universal PCA)…', self)
+        cell_act.triggered.connect(self._select_cell_white_folder)
+        white_menu.addAction(cell_act)
         dark_cap_act = QAction('Set &Dark Field…', self)
         dark_cap_act.triggered.connect(self._select_dark_folder)
         config_menu.addAction(dark_cap_act)
@@ -3188,11 +3192,22 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _launch_cell_adapt_worker(self, master_mean, master_comp,
                                   master_mean_low, master_comp_low):
-        """Find the cell PCA folder and start CellAdaptWorker."""
-        folder = self._find_field_folder('white_field', min_frames=2,
-                                         sidecar_key='white_pca_folder')
+        """Find the cell PCA folder and start CellAdaptWorker.
+
+        Looks for the cell-present white field in this priority order:
+          1. white_cell_folder sidecar key (set via Config → Cell White Field)
+          2. white_pca_folder sidecar key (fallback — same multi-frame folder as regular PCA)
+        This keeps the cell white field independent of the flat/PCA correction white field."""
+        cell_ref = (self._pca_cell_folder
+                    or self._stored_field_refs.get('white_cell_folder', ''))
+        if cell_ref and os.path.isdir(cell_ref) and self._count_white_field_frames(cell_ref) >= 2:
+            folder = cell_ref
+        else:
+            folder = self._find_field_folder('white_field', min_frames=2,
+                                             sidecar_key='white_pca_folder')
         if folder is None:
-            self.corr_status_lbl.setText('Universal PCA: cell white_field folder not found')
+            self.corr_status_lbl.setText(
+                'Universal PCA: no cell white field — use Config → Set White Field → Cell White Field…')
             self.corr_status_lbl.setStyleSheet('color: #c88; font-size: 10px;')
             return
 
@@ -3329,6 +3344,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
             if master and os.path.isdir(master):
                 self._pca_universal     = True
                 self._pca_master_folder = master
+            cell_ref = refs.get('white_cell_folder', '')
+            if cell_ref and os.path.isdir(cell_ref):
+                self._pca_cell_folder = cell_ref
 
     def _get_or_create_sidecar_path(self):
         """Return best sidecar path for writing.
@@ -3387,6 +3405,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
             if self._pca_universal and self._pca_master_folder:
                 updates['white_pca_master_folder'] = self._pca_master_folder
                 updates['pca_universal'] = True
+                if self._pca_cell_folder:
+                    updates['white_cell_folder'] = self._pca_cell_folder
         if not updates:
             self.corr_status_lbl.setText('No active fields to store')
             self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
@@ -3489,6 +3509,22 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._settings.setValue('pca/master_folder', folder)
         if self._pca_universal and self._white_mode == 'pca':
             self._compute_or_load_pca()
+
+    def _select_cell_white_folder(self):
+        """Config → Set White Field → Cell White Field (Universal PCA)…
+        Stores the cell-present white field folder separately from the flat/PCA
+        white field so that setting it does not switch the correction mode."""
+        start = os.path.dirname(self._path) if self._path else ''
+        folder = QFileDialog.getExistingDirectory(
+            self, 'Select cell-present white field folder (Universal PCA)', start)
+        if not folder:
+            return
+        self._pca_cell_folder = folder
+        self._stored_field_refs['white_cell_folder'] = folder
+        if self._pca_universal and self._white_mode == 'pca' and self._pca_master_mean is not None:
+            self._launch_cell_adapt_worker(
+                self._pca_master_mean, self._pca_master_components,
+                self._pca_master_mean_low, self._pca_master_components_low)
 
     def _select_dark_folder(self):
         """File menu: let user manually choose a dark field folder."""
