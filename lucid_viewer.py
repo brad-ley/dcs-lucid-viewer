@@ -12,6 +12,7 @@ compute bytes-per-frame and derive the frame count automatically.
 
 import sys
 import os
+import re
 import json
 import struct
 import time
@@ -502,6 +503,16 @@ def _guess_from_filename(name: str):
         if f.lower() in name.lower():
             return f
     return None
+
+
+def _folder_timestamp(name: str) -> int:
+    """Concatenate all digits from a folder name into an integer for comparison.
+
+    E.g. 'white_field_20240117_143022' → 20240117143022.
+    Returns 0 if the name contains no digits.
+    """
+    digits = re.sub(r'\D', '', name)
+    return int(digits) if digits else 0
 
 
 # ── Field correction (shared math) ────────────────────────────────────────────
@@ -1151,6 +1162,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._export_act.setEnabled(False)
         self._export_act.triggered.connect(self._export_tiff)
         file_menu.addAction(self._export_act)
+        file_menu.addSeparator()
+        set_white_act = QAction('Set &white field folder…', self)
+        set_white_act.triggered.connect(self._select_white_folder)
+        file_menu.addAction(set_white_act)
+        set_dark_act = QAction('Set &dark field folder…', self)
+        set_dark_act.triggered.connect(self._select_dark_folder)
+        file_menu.addAction(set_dark_act)
 
         config_menu = self.menuBar().addMenu('&Config')
         export_settings_act = QAction('&Export settings…', self)
@@ -1295,13 +1313,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
             'Save current dark/white field selection to this file\'s sidecar JSON.\n'
             'On next open the same fields will be loaded automatically.')
         self.store_fields_btn.setEnabled(False)
-        corr_grid.addWidget(self.dark_chk,          0, 0, 1, 2)
-        corr_grid.addWidget(QLabel('White field:'),  1, 0)
-        corr_grid.addWidget(self.white_combo,        1, 1)
+        corr_grid.addWidget(self.dark_chk,            0, 0, 1, 2)
+        corr_grid.addWidget(QLabel('White field:'),   1, 0)
+        corr_grid.addWidget(self.white_combo,         1, 1)
+        corr_grid.addWidget(self.store_fields_btn,    0, 2, 2, 1)
         corr_grid.addWidget(self._pca_n_lbl,         2, 0)
-        corr_grid.addWidget(self.pca_n_spin,         2, 1)
-        corr_grid.addWidget(self.corr_status_lbl,    3, 0)
-        corr_grid.addWidget(self.store_fields_btn,   3, 1)
+        corr_grid.addWidget(self.pca_n_spin,         2, 1, 1, 2)
+        corr_grid.addWidget(self.corr_status_lbl,    3, 0, 1, 3)
         sb.addWidget(corr_box)
 
         sb.addStretch()
@@ -1364,7 +1382,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.dark_chk.toggled.connect(self._toggle_dark_field)
         self.white_combo.currentIndexChanged.connect(self._on_white_mode_changed)
         self.pca_n_spin.valueChanged.connect(self._on_pca_n_changed)
-        self.store_fields_btn.clicked.connect(self._store_field_refs)
+        self.store_fields_btn.clicked.connect(self._store_fields_ref)
 
         self.play_btn.clicked.connect(self._toggle_play)
 
@@ -1785,8 +1803,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 return stored
             print(f'[field] stored ref {stored!r} shape {shape} != target {(tw,th)}, ignoring')
 
-        # --- chronological search ---
+        # --- timestamp-proximity search ---
         parent = os.path.dirname(self._path)
+        exp_ts = _folder_timestamp(os.path.basename(parent))
         for search_dir in [parent, os.path.dirname(parent)]:
             if not os.path.isdir(search_dir):
                 continue
@@ -1794,11 +1813,26 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 all_entries = os.listdir(search_dir)
             except OSError:
                 continue
-            candidates = sorted(
-                [d for d in all_entries
-                 if keyword in d and os.path.isdir(os.path.join(search_dir, d))],
-                reverse=True,
-            )
+            raw_candidates = [
+                d for d in all_entries
+                if keyword in d and os.path.isdir(os.path.join(search_dir, d))
+            ]
+            if exp_ts:
+                # Sort by absolute timestamp distance from experiment folder
+                candidates = sorted(raw_candidates,
+                                    key=lambda d: abs(_folder_timestamp(d) - exp_ts))
+            else:
+                # Fallback: sort by filesystem mtime proximity
+                try:
+                    exp_mtime = os.path.getmtime(parent)
+                except OSError:
+                    exp_mtime = 0.0
+                candidates = sorted(
+                    raw_candidates,
+                    key=lambda d: abs(
+                        (lambda p: os.path.getmtime(p) if os.path.exists(p) else 0.0)(
+                            os.path.join(search_dir, d)) - exp_mtime))
+
             shape_match  = None
             unknown_shape = None
             for name in candidates:
@@ -2063,15 +2097,24 @@ class LucidViewer(ViewerMixin, QMainWindow):
             ext   = os.path.splitext(fname)[1].lower()
             if ext == '.raw':
                 sidecar, _ = _load_sidecar(fpath)
-                fmt = sidecar.get('pixel_format') or sidecar.get('pixelformat') or default_fmt
-                w   = int(sidecar.get('width',  default_w))
-                h   = int(sidecar.get('height', default_h))
+                fmt = (sidecar.get('pixel_format') or sidecar.get('pixelformat')
+                       or sidecar.get('PixelFormat') or sidecar.get('Pixel Format')
+                       or default_fmt)
+                w   = int(sidecar.get('width')  or sidecar.get('Width')  or default_w)
+                h   = int(sidecar.get('height') or sidecar.get('Height') or default_h)
+                fsize = os.path.getsize(fpath)
+                # Use n_frames from sidecar when present (exported files carry this)
+                n_sc = sidecar.get('n_frames')
+                if n_sc is not None:
+                    total += max(1, int(n_sc))
+                    continue
                 try:
                     bpf   = frame_byte_count(fmt, w, h)
-                    fsize = os.path.getsize(fpath)
                     total += max(1, int(fsize // bpf))
                 except Exception:
-                    total += 1
+                    # Unknown format — estimate conservatively at 2 bytes/pixel
+                    bpf_est = w * h * 2
+                    total += max(1, int(fsize // bpf_est)) if bpf_est else 1
             elif ext in ('.tiff', '.tif'):
                 try:
                     import tifffile
@@ -2281,49 +2324,51 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 return candidate
         return stem + '.json'
 
-    def _store_field_refs(self):
-        """Write currently active field folder paths into this file's sidecar JSON."""
+    def _write_sidecar_field_refs(self, updates: dict):
+        """Merge *updates* into the field_references section of the sidecar and save."""
+        sidecar_path = self._get_or_create_sidecar_path()
+        existing = {}
+        if os.path.isfile(sidecar_path):
+            for enc in ('utf-8-sig', 'utf-16', 'latin-1'):
+                try:
+                    with open(sidecar_path, 'r', encoding=enc) as fh:
+                        existing = json.load(fh)
+                    break
+                except (UnicodeDecodeError, UnicodeError):
+                    continue
+        refs = existing.get('field_references', {})
+        refs.update(updates)
+        existing['field_references'] = refs
+        with open(sidecar_path, 'w', encoding='utf-8') as fh:
+            json.dump(existing, fh, indent=2)
+        self._stored_field_refs = refs
+        return sidecar_path
+
+    def _store_fields_ref(self):
+        """Store active dark and/or white field folders to this file's sidecar."""
         if not self._path:
             return
-
-        refs = {}
-        if self.dark_chk.isChecked() and self._dark_field is not None:
+        updates = {}
+        if self._dark_field is not None and not self._dark_field_error:
             folder = self._find_field_folder('dark_field')
             if folder:
-                refs['dark_folder'] = folder
-
-        if self._white_mode == 'flat' and self._white_field is not None:
+                updates['dark_folder'] = folder
+        if self._white_mode == 'flat' and self._white_field is not None and not self._white_field_error:
             folder = self._find_field_folder('white_field')
             if folder:
-                refs['white_folder'] = folder
-                refs['white_mode']   = 'flat'
-        elif self._white_mode == 'pca' and self._pca_components is not None:
-            if self._pca_folder:
-                refs['white_folder'] = self._pca_folder
-                refs['white_mode']   = 'pca'
-
-        if not refs:
-            self.corr_status_lbl.setText('Nothing to store — no correction active')
+                updates['white_folder'] = folder
+                updates['white_mode'] = 'flat'
+        elif self._white_mode == 'pca' and self._pca_components is not None and self._pca_folder:
+            updates['white_folder'] = self._pca_folder
+            updates['white_mode'] = 'pca'
+        if not updates:
+            self.corr_status_lbl.setText('No active fields to store')
             self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
             return
-
-        sidecar_path = self._get_or_create_sidecar_path()
         try:
-            existing = {}
-            if os.path.isfile(sidecar_path):
-                for enc in ('utf-8-sig', 'utf-16', 'latin-1'):
-                    try:
-                        with open(sidecar_path, 'r', encoding=enc) as fh:
-                            existing = json.load(fh)
-                        break
-                    except (UnicodeDecodeError, UnicodeError):
-                        continue
-            existing['field_references'] = refs
-            with open(sidecar_path, 'w', encoding='utf-8') as fh:
-                json.dump(existing, fh, indent=2)
-            self._stored_field_refs = refs
-            self.corr_status_lbl.setText(
-                f'Stored → {os.path.basename(sidecar_path)}')
+            p = self._write_sidecar_field_refs(updates)
+            stored = ', '.join(k.replace('_folder', '').replace('_mode', '') for k in updates)
+            self.corr_status_lbl.setText(f'Stored ({stored}) → {os.path.basename(p)}')
             self.corr_status_lbl.setStyleSheet('color: #6bcf7f; font-size: 10px;')
         except Exception as exc:
             self.corr_status_lbl.setText(f'Store error: {exc}')
@@ -2342,6 +2387,29 @@ class LucidViewer(ViewerMixin, QMainWindow):
         bg     = (mu + comp[:n].T @ coeffs).reshape(frame.shape)
         bg     = np.where(bg >= np.float32(1.0), bg, np.float32(1.0))
         return (f / bg).astype(np.float32)
+
+    def _select_white_folder(self):
+        """File menu: let user manually choose a white field folder."""
+        start = os.path.dirname(self._path) if self._path else ''
+        folder = QFileDialog.getExistingDirectory(self, 'Select white field folder', start)
+        if not folder:
+            return
+        self._stored_field_refs['white_folder'] = folder
+        self._check_white_options()
+        if self.white_combo.currentIndex() > 0:
+            self._reload_fields()
+
+    def _select_dark_folder(self):
+        """File menu: let user manually choose a dark field folder."""
+        start = os.path.dirname(self._path) if self._path else ''
+        folder = QFileDialog.getExistingDirectory(self, 'Select dark field folder', start)
+        if not folder:
+            return
+        self._stored_field_refs['dark_folder'] = folder
+        if not self.dark_chk.isChecked():
+            self.dark_chk.setChecked(True)  # triggers _toggle_dark_field → _reload_fields
+        else:
+            self._reload_fields()
 
     def _reload_fields(self):
         """Reload whichever field references are currently selected for the new file."""
@@ -2416,15 +2484,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
         color = '#ff6b6b' if has_error else '#888'
         self.corr_status_lbl.setStyleSheet(f'color: {color}; font-size: 10px;')
 
-        store_ok = (
-            self._path is not None and (
-                (self._dark_field is not None and not self._dark_field_error)
-                or (self._white_mode == 'flat' and self._white_field is not None
-                    and not self._white_field_error)
-                or (self._white_mode == 'pca' and self._pca_components is not None)
-            )
+        has_file = self._path is not None
+        dark_storable  = has_file and self._dark_field is not None and not self._dark_field_error
+        white_storable = has_file and (
+            (self._white_mode == 'flat' and self._white_field is not None
+             and not self._white_field_error)
+            or (self._white_mode == 'pca' and self._pca_components is not None)
         )
-        self.store_fields_btn.setEnabled(store_ok)
+        self.store_fields_btn.setEnabled(dark_storable or white_storable)
 
     def _refresh_current_frame(self):
         if self._reader is not None:
