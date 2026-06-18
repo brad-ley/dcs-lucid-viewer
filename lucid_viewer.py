@@ -576,6 +576,31 @@ def _auto_pca_n(explained: np.ndarray) -> int:
     return max(1, len(explained))
 
 
+def _blur_downsample_factor(blur_sigma):
+    """Auto-compute block-average stride from blur sigma.
+    Each sigma/50 pixels of blur → 1 bin pixel is sufficient to capture the mode.
+    Capped at 16 to avoid rounding away real structure."""
+    return min(16, max(1, int(blur_sigma // 50)))
+
+
+def _blur_and_bin(f_2d, sigma, n_low):
+    """Blur f_2d and block-average downsample to match n_low pixels.
+
+    B is derived from the stored shape of mu_low so training and application
+    always agree without passing the factor explicitly.
+    Returns a float32 1-D vector of length n_low.
+    """
+    from scipy.ndimage import gaussian_filter
+    H, W = f_2d.shape
+    f_blur = gaussian_filter(f_2d, sigma=float(sigma))
+    if n_low == H * W:
+        return f_blur.ravel().astype(np.float32)
+    B = max(1, round(((H * W) / n_low) ** 0.5))
+    H_low, W_low = H // B, W // B
+    f_crop = f_blur[:H_low * B, :W_low * B]
+    return f_crop.reshape(H_low, B, W_low, B).mean(axis=(1, 3)).ravel().astype(np.float32)
+
+
 def _compute_pca_from_frames(frames, n_components=20, blur_sigma=0.0, progress_cb=None):
     """
     PCA on a list of (H, W) float32 frames using the frame-space covariance
@@ -596,65 +621,82 @@ def _compute_pca_from_frames(frames, n_components=20, blur_sigma=0.0, progress_c
     N = H * W
     n_components = min(n_components, K - 1)
 
-    # Stack frames into one (K, N) array — single allocation, no per-frame copies
+    mu_low = None
+    V_low  = None
+
+    # ── Blur path first: build X_low, project, free before building X ─────────
+    # Downsample by B after blurring — modes of variation are purely macro-scale,
+    # so N/B² pixels carry the same information at a fraction of the memory cost.
+    # X_low and X never coexist, keeping peak memory at one (K, N_low) + one (K, N).
+    if blur_sigma > 0.0:
+        from scipy.ndimage import gaussian_filter
+        B      = _blur_downsample_factor(blur_sigma)
+        H_low  = H // B
+        W_low  = W // B
+        N_low  = H_low * W_low
+        X_low  = np.empty((K, N_low), dtype=np.float32)
+        for i, f in enumerate(frames):
+            _prog(f'PCA (blur): blurring frame {i + 1}/{K}…')
+            f_blur = gaussian_filter(f, sigma=float(blur_sigma))
+            if B > 1:
+                f_crop = f_blur[:H_low * B, :W_low * B]
+                X_low[i] = f_crop.reshape(H_low, B, W_low, B).mean(axis=(1, 3)).ravel()
+            else:
+                X_low[i] = f_blur.ravel()
+        mu_low  = X_low.mean(axis=0)
+        X_low  -= mu_low
+        _prog('PCA (blur): frame covariance…')
+        C_low = X_low.dot(X_low.T).astype(np.float64) / max(K - 1, 1)
+        _prog('PCA (blur): eigendecomposition…')
+        ev_low, evec_low = np.linalg.eigh(C_low)
+        del C_low
+        evec_low = evec_low[:, np.argsort(ev_low)[::-1]]
+        _prog(f'PCA (blur): projecting {n_components} components…')
+        E_low = np.ascontiguousarray(
+            evec_low[:, :n_components].T.astype(np.float32))
+        del evec_low
+        V_low = E_low.dot(X_low)          # project onto blurred data
+        del X_low, E_low
+        norms_low = np.linalg.norm(V_low, axis=1, keepdims=True)
+        np.maximum(norms_low, 1e-10, out=norms_low)
+        V_low /= norms_low
+
+    # ── Main (non-blur) PCA — X_low already freed ────────────────────────────
     _prog(f'PCA: stacking {K} frames…')
     X = np.empty((K, N), dtype=np.float32)
     for i, f in enumerate(frames):
         X[i] = f.ravel()
 
-    # Mean and centering in-place (avoids a second 2 GB alloc)
     _prog('PCA: centering…')
-    mu32 = X.mean(axis=0)          # (N,) float32, one BLAS call
-    X   -= mu32                    # in-place: no extra copy
+    mu32 = X.mean(axis=0)
+    X   -= mu32
 
-    # Frame-space covariance (K, K) — cost: K² × N, one sgemm
     _prog('PCA: computing frame covariance…')
     C = X.dot(X.T).astype(np.float64) / max(K - 1, 1)
 
     _prog('PCA: eigendecomposition…')
-    eigenvalues, eigenvectors = np.linalg.eigh(C)  # ascending
+    eigenvalues, eigenvectors = np.linalg.eigh(C)
+    del C
     order        = np.argsort(eigenvalues)[::-1]
     eigenvalues  = eigenvalues[order]
-    eigenvectors = eigenvectors[:, order]           # (K, K)
+    eigenvectors = eigenvectors[:, order]
 
-    # Pixel-space components — ONE sgemm: (n_comp, K) @ (K, N) → (n_comp, N)
     _prog(f'PCA: projecting {n_components} components…')
     evecs = np.ascontiguousarray(
-        eigenvectors[:, :n_components].T.astype(np.float32))  # (n_comp, K)
-    V = evecs.dot(X)                                           # (n_comp, N)
+        eigenvectors[:, :n_components].T.astype(np.float32))
+    del eigenvectors
+    V = evecs.dot(X)
+    del X, evecs
 
-    # Normalise rows
     norms = np.linalg.norm(V, axis=1, keepdims=True)
     np.maximum(norms, 1e-10, out=norms)
     V /= norms
-    components = V                                             # (n_comp, N) float32
+    components = V
 
     total_var = float(max(eigenvalues[eigenvalues > 0].sum(), 1e-12))
     explained = (eigenvalues[:n_components] / total_var).astype(np.float32)
 
-    if blur_sigma > 0.0:
-        from scipy.ndimage import gaussian_filter
-        _prog('PCA (blur): blurring and stacking frames…')
-        X_low = np.empty((K, N), dtype=np.float32)
-        for i, f in enumerate(frames):
-            X_low[i] = gaussian_filter(f, sigma=float(blur_sigma)).ravel()
-        mu_low = X_low.mean(axis=0)
-        X_low -= mu_low
-        _prog('PCA (blur): frame covariance…')
-        C_low = X_low.dot(X_low.T).astype(np.float64) / max(K - 1, 1)
-        _prog('PCA (blur): eigendecomposition…')
-        ev_low, evec_low = np.linalg.eigh(C_low)
-        evec_low = evec_low[:, np.argsort(ev_low)[::-1]]
-        _prog(f'PCA (blur): projecting {n_components} components…')
-        E_low = np.ascontiguousarray(
-            evec_low[:, :n_components].T.astype(np.float32))
-        V_low = E_low.dot(X_low)
-        norms_low = np.linalg.norm(V_low, axis=1, keepdims=True)
-        np.maximum(norms_low, 1e-10, out=norms_low)
-        V_low /= norms_low
-        return mu32, components, explained, mu_low, V_low
-
-    return mu32, components, explained, None, None
+    return mu32, components, explained, mu_low, V_low
 
 
 # ── TIFF export worker ────────────────────────────────────────────────────────
@@ -718,9 +760,8 @@ class TiffExportWorker(QThread):
             if (self._pca_blur_enabled
                     and self._pca_mean_low is not None
                     and self._pca_components_low is not None):
-                from scipy.ndimage import gaussian_filter
                 n_low  = min(n, self._pca_components_low.shape[0])
-                f_low  = gaussian_filter(f, sigma=float(self._pca_blur_sigma)).ravel()
+                f_low  = _blur_and_bin(f, self._pca_blur_sigma, self._pca_mean_low.shape[0])
                 d_low  = f_low - self._pca_mean_low
                 coeffs = self._pca_components_low[:n_low] @ d_low
                 bg     = (mu + comp[:n_low].T @ coeffs).reshape(frame.shape)
@@ -944,9 +985,8 @@ class GifExportWorker(QThread):
             if (self._pca_blur_enabled
                     and self._pca_mean_low is not None
                     and self._pca_components_low is not None):
-                from scipy.ndimage import gaussian_filter
                 n_low  = min(n, self._pca_components_low.shape[0])
-                f_low  = gaussian_filter(f, sigma=float(self._pca_blur_sigma)).ravel()
+                f_low  = _blur_and_bin(f, self._pca_blur_sigma, self._pca_mean_low.shape[0])
                 d_low  = f_low - self._pca_mean_low
                 coeffs = self._pca_components_low[:n_low] @ d_low
                 bg     = (mu + comp[:n_low].T @ coeffs).reshape(frame.shape)
@@ -1054,6 +1094,12 @@ class PcaComputeWorker(QThread):
         files = raw_files if raw_files else tif_files
         if not files:
             return []
+        # Memory cap: keep stacked (K, H*W) float32 array under 1.5 GB.
+        # blur path creates a second identical array, so 1.5 GB each → ~3 GB peak.
+        MAX_STACK_BYTES = int(1.5 * 1024 ** 3)
+        bytes_per_frame = max(1, self._w * self._h * 4)
+        mem_cap = max(4, MAX_STACK_BYTES // bytes_per_frame)
+        max_frames = min(max_frames, mem_cap)
         frames = []
         n = len(files)
         for i, fname in enumerate(files):
@@ -1157,13 +1203,13 @@ class CellAdaptWorker(QThread):
             if (self._blur_sigma > 0
                     and self._master_mean_low is not None
                     and self._master_components_low is not None):
-                from scipy.ndimage import gaussian_filter
                 self.adapt_progress.emit('Cell adaptation: blurring cell mean…')
-                mu_low_cell = gaussian_filter(
-                    cell_mean_2d, sigma=float(self._blur_sigma)).ravel().astype(np.float32)
+                # mu_low_cell must be in the same downsampled space as master_mean_low
+                n_low       = self._master_mean_low.shape[0]
+                mu_low_cell = _blur_and_bin(cell_mean_2d, self._blur_sigma, n_low)
                 mu_master_low = np.maximum(self._master_mean_low, np.float32(1e-3))
-                T_cell_low    = mu_low_cell / mu_master_low             # (H*W,)
-                E_low_cell    = self._master_components_low * T_cell_low  # (n, H*W)
+                T_cell_low    = mu_low_cell / mu_master_low             # (N_low,)
+                E_low_cell    = self._master_components_low * T_cell_low  # (n, N_low)
 
                 self.adapt_progress.emit('Cell adaptation: re-orthogonalizing…')
                 Q, _ = np.linalg.qr(E_low_cell.T)                      # (H*W, n)
@@ -3052,7 +3098,6 @@ class LucidViewer(ViewerMixin, QMainWindow):
         blur_tag = f'  [blur σ={self._pca_blur_sigma}px]' if self._pca_blur_enabled else ''
         self.corr_status_lbl.setText(f'PCA ✓  {n_stored} comp, top 3: {ev_str}{blur_tag}')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
-        self.statusBar().clearMessage()
         self._set_white_field_info(folder)
         self._refresh_current_frame()
         self._auto_levels()
@@ -3060,7 +3105,6 @@ class LucidViewer(ViewerMixin, QMainWindow):
     def _on_pca_progress(self, msg):
         self.corr_status_lbl.setText(msg)
         self.corr_status_lbl.setStyleSheet('color: #aaa; font-size: 10px;')
-        self.statusBar().showMessage(msg)
 
     # ------------------------------------------------------------------ #
     # Universal PCA (cell-transform) methods                               #
@@ -3199,7 +3243,6 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.corr_status_lbl.setText(
             f'PCA ✓  universal {n} comp (cell-adapted){blur_tag}')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
-        self.statusBar().clearMessage()
         master_name = os.path.basename(self._pca_master_folder) if self._pca_master_folder else ''
         extra_tip = f'master: {master_name}' if master_name else ''
         self._set_white_field_info(folder, extra_tip)
