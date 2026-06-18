@@ -506,13 +506,25 @@ def _guess_from_filename(name: str):
 
 
 def _folder_timestamp(name: str) -> int:
-    """Concatenate all digits from a folder name into an integer for comparison.
+    """Extract a compact date-time integer from a folder name for proximity comparison.
 
-    E.g. 'white_field_20240117_143022' → 20240117143022.
-    Returns 0 if the name contains no digits.
+    Tries patterns in order:
+      1. YYYYMMDD + HHMMSS  → e.g. 'exp_20240117_173400' → 20240117173400
+      2. YYYYMMDD alone     → e.g. 'exp_20240117'         → 20240117000000
+      3. Returns 0 if no recognisable date found.
+
+    Using pattern matching (not raw digit concat) avoids camera-model numbers
+    like 'ATX245' or '12bit' corrupting the comparison.
     """
-    digits = re.sub(r'\D', '', name)
-    return int(digits) if digits else 0
+    # 8-digit date followed immediately or after one separator by 6-digit time
+    m = re.search(r'(\d{8})[_\-\s]?(\d{6})', name)
+    if m:
+        return int(m.group(1) + m.group(2))
+    # 8-digit date alone (no time component)
+    m = re.search(r'\d{8}', name)
+    if m:
+        return int(m.group(0)) * 1_000_000  # pad to same scale as full datetime
+    return 0
 
 
 # ── Field correction (shared math) ────────────────────────────────────────────

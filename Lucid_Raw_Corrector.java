@@ -179,13 +179,23 @@ public class Lucid_Raw_Corrector implements PlugIn {
     // ── Field selection / loading ─────────────────────────────────────────────
     static class Field { File folder; double gain; Field(File f, double g){folder=f;gain=g;} }
 
-    /** Concatenate all digit characters from a folder name into a long for timestamp comparison.
-     *  E.g. "white_field_20240117_143022" → 20240117143022L. Returns 0 if no digits. */
+    /** Extract a compact date-time long from a folder name for proximity comparison.
+     *  Matches YYYYMMDD + optional sep + HHMMSS first, then YYYYMMDD alone.
+     *  Avoids mixing in camera-model numbers (e.g. "ATX245", "12bit") the way a
+     *  raw digit-concat would.  Returns 0 if no recognisable date found. */
     static long folderTimestamp(String name) {
-        StringBuilder sb = new StringBuilder();
-        for (char c : name.toCharArray()) if (Character.isDigit(c)) sb.append(c);
-        if (sb.length() == 0) return 0L;
-        try { return Long.parseLong(sb.toString()); } catch (NumberFormatException e) { return 0L; }
+        java.util.regex.Matcher m =
+            java.util.regex.Pattern.compile("(\\d{8})[_\\-\\s]?(\\d{6})").matcher(name);
+        if (m.find()) {
+            try { return Long.parseLong(m.group(1) + m.group(2)); }
+            catch (NumberFormatException e) { /* fall through */ }
+        }
+        m = java.util.regex.Pattern.compile("\\d{8}").matcher(name);
+        if (m.find()) {
+            try { return Long.parseLong(m.group(0)) * 1_000_000L; }
+            catch (NumberFormatException e) { /* fall through */ }
+        }
+        return 0L;
     }
 
     /** Folders containing keyword, sorted by closestTimestamp or reverse-name, taken from the
