@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QComboBox,
     QGroupBox, QGridLayout, QSpinBox, QFormLayout,
     QSplitter, QMessageBox, QSlider, QCheckBox,
-    QDialog, QProgressBar, QDialogButtonBox,
+    QDialog, QProgressBar, QDialogButtonBox, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon
@@ -1137,6 +1137,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._play_timer        = None   # QTimer driving playback
         self._play_start_wall   = 0.0    # time.monotonic() when play started
         self._play_start_ts_idx = 0      # frame index at play start
+        self._auto_levels_done  = False  # True after first frame of each file is shown
 
         self.setWindowTitle('LucidLabs ATX245 Viewer')
         self.resize(1300, 860)
@@ -1313,6 +1314,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
             'Save current dark/white field selection to this file\'s sidecar JSON.\n'
             'On next open the same fields will be loaded automatically.')
         self.store_fields_btn.setEnabled(False)
+        self.store_fields_btn.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         corr_grid.addWidget(self.dark_chk,            0, 0, 1, 2)
         corr_grid.addWidget(QLabel('White field:'),   1, 0)
         corr_grid.addWidget(self.white_combo,         1, 1)
@@ -1577,6 +1580,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self._trigger_t0 = float(ts[trigger_idxs[0]])
         self.frame_slider.set_triggers(self._trigger_frames)
 
+        self._auto_levels_done = False
         self._show_frame(0)
 
         fps_part = f'  |  {fps:.3f} fps' if fps else ''
@@ -1605,7 +1609,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         data_gain = (self._gains[idx] if self._gains is not None and idx < len(self._gains)
                      else None)
         display_frame = self._apply_field_correction(frame, data_gain=data_gain)
-        self.imview.setImage(display_frame, autoLevels=(idx == 0), autoRange=False)
+        auto = not self._auto_levels_done
+        self._auto_levels_done = True
+        self.imview.setImage(display_frame, autoLevels=auto, autoRange=False)
         self._pixel_inspector.update(display_frame)
         self._apply_colormap(self.cmap_combo.currentText())
         self._update_mask(frame)
