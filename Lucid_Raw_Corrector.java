@@ -118,8 +118,9 @@ public class Lucid_Raw_Corrector implements PlugIn {
         long   t0Ns = (tm != null && tm.triggerIdx >= 0) ? tm.tsNs[tm.triggerIdx]
                       : (tsNs != null && tsNs.length > 0 ? tsNs[0] : 0L);
 
-        List<Field> darks  = findCandidates(dataDir, "dark_field");
-        List<Field> whites = findCandidates(dataDir, "white_field");
+        // Default to closest-timestamp sort (mirrors lucid_viewer.py); shown in dialog.
+        List<Field> darks  = findCandidates(dataDir, "dark_field",  true);
+        List<Field> whites = findCandidates(dataDir, "white_field", true);
 
         boolean useDark = false, useWhite = false;
         boolean matchMode = true;
@@ -136,11 +137,19 @@ public class Lucid_Raw_Corrector implements PlugIn {
             gd.addChoice("Gain handling:",
                 new String[]{"Match gain (closest capture)", "Scale most-recent to data gain"},
                 "Match gain (closest capture)");
+            gd.addChoice("Field sort:",
+                new String[]{"Closest timestamp to data", "Reverse chronological (most-recent)"},
+                "Closest timestamp to data");
             gd.showDialog();
             if (gd.wasCanceled()) return;
             if (hasDark)  useDark  = gd.getNextBoolean();
             if (hasWhite) useWhite = gd.getNextBoolean();
             matchMode = gd.getNextChoiceIndex() == 0;
+            boolean closestTs = gd.getNextChoiceIndex() == 0;
+            if (!closestTs) {
+                darks  = findCandidates(dataDir, "dark_field",  false);
+                whites = findCandidates(dataDir, "white_field", false);
+            }
         }
 
         float[] dark = null, white = null;

@@ -1287,7 +1287,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         corr_grid.setSpacing(4)
         self.dark_chk  = QCheckBox('Dark field')
         self.dark_chk.setToolTip(
-            'Finds most recent dark_field_* folder in parent directory\n'
+            'Finds closest dark_field_* folder by timestamp\n'
             'and averages all frames as the dark reference.'
         )
         self.white_combo = QComboBox()
@@ -1971,6 +1971,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._dark_field       = None
             self._dark_field_gain  = None
             self._dark_field_error = None
+            self.dark_chk.setToolTip(
+                'Finds closest dark_field_* folder by timestamp\n'
+                'and averages all frames as the dark reference.')
             self._refresh_corr_status()
             self._refresh_current_frame()
             return
@@ -1993,6 +1996,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
             return
         self._dark_field_gain  = self._read_average_gain(folder)
         self._dark_field_error = self._check_field_shape(self._dark_field, 'dark')
+        self.dark_chk.setToolTip(
+            f'Using: {os.path.basename(folder)}\n'
+            f'Path: {folder}\n\n'
+            'Averages all frames as the dark reference.')
         self._refresh_corr_status()
         self._refresh_current_frame()
 
@@ -2007,6 +2014,12 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._pca_components    = None
             self._pca_n_lbl.setVisible(False)
             self.pca_n_spin.setVisible(False)
+            self.white_combo.setToolTip(
+                'None: no white-field correction\n'
+                'Flat field: divide by averaged white-field frames\n'
+                'PCA removal: project each frame onto a PCA basis built from white-field\n'
+                '  frames and subtract the estimated background\n\n'
+                'Disabled options mean no compatible white_field folder was found.')
             self._refresh_corr_status()
             self._refresh_current_frame()
 
@@ -2037,6 +2050,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._white_mode        = 'flat'
             self._pca_mean          = None
             self._pca_components    = None
+            self.white_combo.setToolTip(
+                f'Using: {os.path.basename(folder)}\n'
+                f'Path: {folder}\n\n'
+                'Flat field: divides each frame by the averaged white-field frames.')
             self._refresh_corr_status()
             self._refresh_current_frame()
 
@@ -2228,6 +2245,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self.corr_status_lbl.setText(
                         f'PCA ✓  {n_stored} comp cached, top 3: {ev_str}')
                     self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+                    self.white_combo.setToolTip(
+                        f'Using: {os.path.basename(folder)}\n'
+                        f'Path: {folder}\n\n'
+                        'PCA removal: subtracts top N PCA components of the background.')
                     self._refresh_current_frame()
                     return
             except Exception as exc:
@@ -2279,6 +2300,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
             f'{e*100:.1f}%' for e in explained[:min(3, n_stored)])
         self.corr_status_lbl.setText(f'PCA ✓  {n_stored} comp, top 3: {ev_str}')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+        self.white_combo.setToolTip(
+            f'Using: {os.path.basename(folder)}\n'
+            f'Path: {folder}\n\n'
+            'PCA removal: subtracts top N PCA components of the background.')
         self._refresh_current_frame()
 
     def _on_pca_error(self, msg):
