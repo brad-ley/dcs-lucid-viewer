@@ -205,6 +205,99 @@ The status bar shows two FPS values:
 
 ---
 
+## Lucid Viewer — White Field Division
+
+The companion Python viewer (`lucid_viewer.py`) corrects beam inhomogeneity in three
+modes. Set the active mode from **Config → Set White Field** and the sidebar
+**Correction** group.
+
+### Folder naming conventions
+
+Capture reference frames at the same resolution and pixel format as your experiment
+and store them in folders alongside your data:
+
+| Folder name pattern | Purpose |
+|---------------------|---------|
+| `dark_field_*` | Camera dark current (no beam, lens cap on) |
+| `white_field_*` | Full-beam flat-field or PCA reference |
+| `*_master*` | Universal / Master PCA no-cell reference |
+
+The viewer auto-discovers the closest-timestamp folder when you open a file.
+A file with `mean` in its name inside the folder is preferred for flat-field mode.
+
+### Mode 1 — Flat Field
+
+**Config → Set White Field → Flat Field…**
+
+Divides each data frame by an averaged white-field image, yielding transmission in
+the range 0–1. When a dark field is also loaded both dark-current terms are removed:
+
+| Fields loaded | Formula |
+|---------------|---------|
+| White only | `T = data / white` |
+| Dark + White | `T = (data − dark) / (white − dark)` |
+| Dark only | `corrected = data − dark` |
+
+If the data and field captures used different camera gains the viewer automatically
+scale-corrects before dividing:
+`field_scaled = field × 10^((data_gain − field_gain) / 20)`
+
+### Mode 2 — PCA Removal
+
+**Config → Set White Field → PCA…**
+
+Models the x-ray beam background with PCA built from the white-field folder and
+removes it per-frame (`T = data / bg`).
+
+1. All frames in the selected white-field folder are stacked.
+2. PCA is computed (up to N+2 components capped at 20; N is the sidebar spinner).
+   The number of components used for each frame is auto-selected by explained
+   variance.
+3. Each data frame is projected onto the basis to reconstruct the smooth beam
+   background `bg`, then `T = data / bg`.
+
+**PCA Settings dialog** (`Config → PCA Settings…` or the sidebar button):
+
+| Option | Effect |
+|--------|--------|
+| N components (1–20) | Number of PCA components used for background estimation |
+| Gaussian blur σ | Blur frames before projection to isolate macro-scale beam variation |
+| Universal mode | Adapt Master PCA eigenvectors per-experiment instead of recomputing |
+
+A cache file `pca_cache_{H}x{W}.npz` (or `…_blur{sigma}.npz` when blur is on) is
+written to the white-field folder after the first computation and reused until any
+source frame is newer. Delete the cache file to force recomputation.
+
+### Mode 3 — Universal / Master PCA
+
+**Config → Set White Field → Master PCA…** *(enable Universal mode in PCA Settings)*
+
+Builds one PCA basis from a "no-cell" master folder and adapts it per-experiment
+without re-running SVD:
+
+1. Master PCA is loaded from cache or computed from the master folder.
+2. Per-cell mean is computed from the current white-field folder.
+3. Each eigenvector is rescaled: `E_cell = E_master × (cell_mean / master_mean)`.
+4. The scaled basis is re-orthogonalized via QR decomposition.
+
+The master folder is located automatically by searching parent directories for any
+folder with `_master` in its name, sorted by timestamp proximity.
+
+### Storing field references
+
+Click **Store** in the sidebar Correction group to save the currently loaded field
+folder paths into the experiment's `.json` sidecar (`field_references` key). On the
+next open the viewer reloads them automatically.
+
+### TIFF export with correction
+
+**File → Export TIFF…** applies the active correction to every frame and writes a
+float32 TIFF stack. Each page stores `transmission_min`/`transmission_max` in TIFF
+metadata. With ImageJ-compatible export these values go to a `_transmission.json`
+sidecar instead.
+
+---
+
 ## Troubleshooting
 
 **Camera not detected**

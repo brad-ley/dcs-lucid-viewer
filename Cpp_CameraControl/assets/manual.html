@@ -271,6 +271,10 @@
             <a href="#output">Output Files</a>
             <a href="#loading-data">Loading Image Data</a>
             <a href="#metadata">Metadata &amp; Frame Data</a>
+            <a href="#field-correction">Field Correction</a>
+            <a href="#field-flat" style="padding-left:28px; font-size:12.5px;">↳ Flat Field</a>
+            <a href="#field-pca" style="padding-left:28px; font-size:12.5px;">↳ PCA Removal</a>
+            <a href="#field-master" style="padding-left:28px; font-size:12.5px;">↳ Master PCA</a>
             <a href="#troubleshooting">Troubleshooting</a>
         </nav>
 
@@ -1134,7 +1138,8 @@ else:
 
                 <h3>Applying Dark and White Field Correction</h3>
                 <p>
-                    If you captured dark and white fields, correct your data frames with:
+                    If you captured dark and white fields, you can apply flat-field correction
+                    manually or use the Lucid Viewer application. For a quick manual correction:
                 </p>
                 <div class="code-block">
                     <code>import tifffile, numpy as np
@@ -1149,6 +1154,12 @@ denom[denom == 0] = 1          # avoid divide-by-zero on dead pixels
 corrected = (frame - dark) / denom
 corrected = np.clip(corrected, 0.0, 1.0)</code>
                 </div>
+                <p>
+                    For PCA-based background removal, Universal/Master PCA, gain-mismatch
+                    auto-scaling, and the full interactive GUI workflow, see the
+                    <a href="#field-correction" style="color:#1976D2;">White Field Division</a>
+                    section below.
+                </p>
             </section>
 
             <!-- ================================================================
@@ -1197,6 +1208,239 @@ print(df[df["dropped"]])</code>
                     and <strong>ChunkEnable</strong> nodes. If chunk data is not enabled those columns will
                     contain placeholder values or be absent, and the live GPIO display in the preview window
                     will show <em>N/A</em>.
+                </p>
+            </section>
+
+            <!-- ================================================================
+                 FIELD CORRECTION SECTION
+                 ================================================================ -->
+            <section id="field-correction" class="section">
+                <h2>White Field Division — Lucid Viewer</h2>
+                <p>
+                    The companion Python viewer (<code>lucid_viewer.py</code>) provides three modes for
+                    correcting x-ray beam inhomogeneity. All modes are controlled from
+                    <strong>Config → Set White Field</strong> and the sidebar <strong>Correction</strong> group.
+                </p>
+
+                <h3>Folder Naming Conventions</h3>
+                <p>
+                    Capture reference frames at the same resolution and pixel format as your experiment and
+                    store them in named folders alongside your data:
+                </p>
+                <table>
+                    <thead>
+                        <tr><th>Folder name pattern</th><th>Purpose</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>dark_field_*</code></td><td>Camera dark current — no beam, lens cap on</td></tr>
+                        <tr><td><code>white_field_*</code></td><td>Full-beam flat-field or PCA reference frames</td></tr>
+                        <tr><td><code>*_master*</code></td><td>Universal / Master PCA no-cell reference</td></tr>
+                    </tbody>
+                </table>
+                <p>
+                    The viewer auto-discovers the folder whose timestamp is closest to the experiment folder when
+                    you open a file. A file with <code>mean</code> in its name inside the folder is preferred
+                    for flat-field loading.
+                </p>
+
+                <h3 id="field-flat">Mode 1 — Flat Field</h3>
+                <p>
+                    <strong>Config → Set White Field → Flat Field…</strong>
+                </p>
+                <p>
+                    Divides each data frame by a single averaged white-field image to produce a transmission
+                    image in the range 0–1. The formula applied depends on which reference fields are loaded:
+                </p>
+                <table>
+                    <thead>
+                        <tr><th>Fields loaded</th><th>Formula</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>White only</td><td><code>T = data / white</code></td></tr>
+                        <tr><td>Dark + White</td><td><code>T = (data − dark) / (white − dark)</code></td></tr>
+                        <tr><td>Dark only</td><td><code>corrected = data − dark</code></td></tr>
+                    </tbody>
+                </table>
+                <div class="tip">
+                    <strong>Gain mismatch:</strong> If the data and field captures used different camera gains,
+                    the viewer automatically scales the reference field before dividing:
+                    <code>field_scaled = field × 10<sup>(data_gain − field_gain) / 20</sup></code>.
+                    No manual intervention is needed.
+                </div>
+                <div class="code-block">
+                    <code>import tifffile, numpy as np
+
+# Load averaged reference frames
+dark  = tifffile.imread("dark_field_mean.tiff").astype(np.float32)
+white = tifffile.imread("white_field_mean.tiff").astype(np.float32)
+
+# Load per-frame gain (dB) from frame_data.csv if fields were captured at a different gain
+import pandas as pd
+gains = pd.read_csv("frame_data.csv")["gain_db"].values
+field_gain = 0.0   # dB value used when the reference was captured
+
+def flat_correct(frame, data_gain):
+    scale = 10 ** ((data_gain - field_gain) / 20.0)
+    d = dark * scale
+    w = white * scale
+    denom = w - d
+    denom[denom == 0] = 1
+    return np.clip((frame.astype(np.float32) - d) / denom, 0.0, 1.0)
+
+# Apply to every frame in a stack
+stack = tifffile.imread("stack.tiff")
+corrected = np.stack([flat_correct(stack[i], gains[i]) for i in range(len(stack))])</code>
+                </div>
+
+                <h3 id="field-pca">Mode 2 — PCA Removal</h3>
+                <p>
+                    <strong>Config → Set White Field → PCA…</strong>
+                </p>
+                <p>
+                    Models the spatially varying x-ray beam background using Principal Component Analysis
+                    computed from the white-field folder, then removes it from each data frame.
+                    This mode handles beam profiles that vary slowly in time and cannot be captured by a single
+                    static reference image.
+                </p>
+                <p>
+                    Capture the white-field sequence with the <em>cell in place</em> (beam on) via
+                    <strong>Tools → Capture White Field</strong>. The acquisition collects 100 frames or
+                    5 s, whichever is longer. Because the cell is present during capture, the PCA basis
+                    encodes both the spatially varying beam profile and the static cell background;
+                    dividing by the reconstructed background removes both.
+                </p>
+                <ol>
+                    <li>All TIFF/RAW frames in the selected white-field folder are loaded and stacked (minimum 2 frames required).</li>
+                    <li>PCA is computed on the stack. Up to N+2 components are trained (N is the sidebar spinner value, capped at 20).</li>
+                    <li>The number of components used per frame is auto-selected from explained variance.</li>
+                    <li>For each data frame, the PCA basis reconstructs the smooth beam background <code>bg</code>, then <code>T = data / bg</code>.</li>
+                </ol>
+                <p>
+                    <strong>PCA Settings dialog</strong> — opened via <strong>Config → PCA Settings…</strong>
+                    or the sidebar <em>PCA settings…</em> button:
+                </p>
+                <table>
+                    <thead>
+                        <tr><th>Option</th><th>Effect</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>N components (1–20)</td>
+                            <td>Maximum number of PCA components used for background estimation. More components capture finer beam structure but risk removing sample signal.</td>
+                        </tr>
+                        <tr>
+                            <td>Gaussian blur σ (px)</td>
+                            <td>Blur frames before projection to isolate macro-scale beam variation only; fine sample detail is excluded from the PCA basis.</td>
+                        </tr>
+                        <tr>
+                            <td>Universal mode</td>
+                            <td>Adapt a pre-computed Master PCA basis per experiment instead of re-running SVD for each folder (see Mode 3).</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h4>PCA Cache</h4>
+                <p>
+                    After the first computation a cache file is written to the white-field folder:
+                </p>
+                <ul>
+                    <li><code>pca_cache_{H}x{W}.npz</code> — standard resolution</li>
+                    <li><code>pca_cache_{H}x{W}_blur{sigma}.npz</code> — when Gaussian blur is enabled</li>
+                </ul>
+                <p>
+                    The cache is reused as long as it is newer than every source frame in the folder.
+                    Delete the <code>.npz</code> file or modify any source frame to force recomputation.
+                </p>
+                <div class="code-block">
+                    <code>import numpy as np, tifffile
+
+# Load a previously saved PCA cache
+cache = np.load("white_field_001/pca_cache_4608x5328.npz")
+mu   = cache["mean"]        # shape (H*W,)
+comp = cache["components"]  # shape (n_components, H*W)
+
+H, W = 4608, 5328
+
+def pca_correct(frame, n_components=3):
+    f  = frame.astype(np.float32).ravel()
+    c  = f - mu                                      # centre
+    scores = comp[:n_components] @ c                 # project
+    bg = mu + (comp[:n_components].T @ scores)       # reconstruct background
+    bg = bg.reshape(H, W)
+    bg[bg == 0] = 1
+    return (frame.astype(np.float32) / bg)
+
+stack = tifffile.imread("stack.tiff")
+corrected = np.stack([pca_correct(stack[i]) for i in range(len(stack))])</code>
+                </div>
+
+                <h3 id="field-master">Mode 3 — Universal / Master PCA</h3>
+                <p>
+                    <strong>Config → Set White Field → Master PCA…</strong> &#8212; then enable
+                    <strong>Universal mode</strong> in the PCA Settings dialog.
+                </p>
+                <p>
+                    This is a two-step workflow. A high-quality PCA basis is computed once from a "no-cell"
+                    master reference, then adapted per experiment using a shorter per-experiment white field.
+                    The two-step approach avoids re-running SVD for every cell while still accounting for
+                    both beam non-uniformity <em>and</em> the static cell background.
+                </p>
+
+                <h4>Step 1 — Master reference (captured once per ROI)</h4>
+                <p>
+                    With the beam on and <em>no cell</em> in the field of view, capture a master white field via
+                    <strong>Tools → Capture Master PCA Field</strong>. The acquisition collects 500 frames or
+                    5 s, whichever is longer — this larger frame count is intentional, since the master PCA
+                    is computed once and benefits from a high-quality basis. The frames are stored in a
+                    <code>*_master*</code> folder and do not need to be recaptured unless the ROI or beam
+                    geometry changes significantly.
+                </p>
+
+                <h4>Step 2 — Per-experiment cell reference (captured per experiment)</h4>
+                <p>
+                    With the beam on and the <em>cell in place</em>, capture a white field via
+                    <strong>Tools → Capture White Field</strong> (100 frames or 5 s, whichever is longer).
+                    The viewer uses this reference to:
+                </p>
+                <ol>
+                    <li>Compute the per-cell mean from the frames in this white-field folder.</li>
+                    <li>Rescale each master eigenvector: <code>E_cell = E_master × (cell_mean / master_mean)</code>.</li>
+                    <li>Re-orthogonalize the scaled basis via QR decomposition — no SVD required.</li>
+                    <li>Divide each data frame by the reconstructed PCA background, removing both the
+                        spatially varying beam profile <em>and</em> the static cell background.</li>
+                </ol>
+                <div class="note">
+                    <strong>Why the cell-in-place reference is needed:</strong> The master basis captures the
+                    beam profile without cell absorption. The per-experiment white field — captured through
+                    the cell — provides the cell's static transmission pattern. Dividing by the cell-adapted
+                    background removes both effects, leaving only dynamic sample features. If cell background
+                    removal is not needed, use Mode 2 (PCA Removal) instead, which skips the master step
+                    entirely.
+                </div>
+                <div class="tip">
+                    <strong>Auto-discovery:</strong> The viewer searches parent directories (up to 4 levels up)
+                    for a folder containing <code>_master</code> in its name and selects the one with the
+                    closest timestamp to the current experiment. You can also set the master folder explicitly
+                    via <strong>Config → Set White Field → Master PCA…</strong>.
+                </div>
+
+                <h3>Storing Field References in the Sidecar</h3>
+                <p>
+                    Click <strong>Store</strong> in the sidebar Correction group to save the currently loaded
+                    field folder paths into the experiment's <code>.json</code> sidecar file under the
+                    <code>field_references</code> key. On next open the viewer reloads these paths automatically,
+                    so you do not need to re-select fields for every session.
+                </p>
+
+                <h3>TIFF Export with Correction Applied</h3>
+                <p>
+                    <strong>File → Export TIFF…</strong> applies the active correction to every frame and
+                    writes a float32 TIFF stack. Each TIFF page stores
+                    <code>transmission_min</code>/<code>transmission_max</code> in its metadata for
+                    quantitative readback. When <em>ImageJ-compatible</em> export is selected these range
+                    values go to a <code>_transmission.json</code> sidecar file instead.
+                    The exported file name suffix reflects the active correction:
+                    <code>_dark_white</code>, <code>_pca</code>, <code>_dark_pca</code>, etc.
                 </p>
             </section>
 

@@ -1,541 +1,492 @@
 <!DOCTYPE html>
-<html lang="en">
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LucidLabs ATX245 Viewer — User Manual</title>
-  <style>
-    :root {
-      --bg:      #1e1e1e;
-      --bg2:     #2b2b2b;
-      --bg3:     #3c3f41;
-      --border:  #555;
-      --text:    #dddddd;
-      --muted:   #aaaaaa;
-      --accent:  #4a9eff;
-      --accent2: #78d97c;
-      --warn:    #e8a44a;
-      --code-bg: #1a1a2e;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.65;
-      font-size: 14px;
-    }
-    /* ── Layout ── */
-    .wrapper { display: flex; min-height: 100vh; }
-    nav {
-      width: 240px;
-      flex-shrink: 0;
-      background: var(--bg2);
-      border-right: 1px solid var(--border);
-      padding: 24px 0;
-      position: sticky;
-      top: 0;
-      height: 100vh;
-      overflow-y: auto;
-    }
-    nav .logo {
-      padding: 0 20px 20px;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 12px;
-    }
-    nav .logo h2 {
-      font-size: 13px;
-      font-weight: 700;
-      color: var(--accent);
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }
-    nav .logo p { font-size: 11px; color: var(--muted); margin-top: 2px; }
-    nav a {
-      display: block;
-      padding: 6px 20px;
-      color: var(--muted);
-      text-decoration: none;
-      font-size: 13px;
-      border-left: 3px solid transparent;
-      transition: all 0.15s;
-    }
-    nav a:hover, nav a.active {
-      color: var(--text);
-      background: var(--bg3);
-      border-left-color: var(--accent);
-    }
-    nav .section-label {
-      padding: 14px 20px 4px;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: #666;
-    }
-    main {
-      flex: 1;
-      padding: 48px 60px;
-      max-width: 900px;
-    }
-    /* ── Typography ── */
-    h1 {
-      font-size: 2em;
-      font-weight: 700;
-      color: var(--text);
-      margin-bottom: 8px;
-    }
-    h1 .badge {
-      font-size: 0.4em;
-      background: var(--accent);
-      color: #000;
-      padding: 2px 8px;
-      border-radius: 3px;
-      vertical-align: middle;
-      margin-left: 8px;
-      font-weight: 600;
-    }
-    h2 {
-      font-size: 1.35em;
-      font-weight: 600;
-      color: var(--text);
-      margin: 40px 0 12px;
-      padding-bottom: 6px;
-      border-bottom: 1px solid var(--border);
-    }
-    h3 {
-      font-size: 1.05em;
-      font-weight: 600;
-      color: var(--accent);
-      margin: 24px 0 8px;
-    }
-    p { margin-bottom: 12px; color: var(--text); }
-    ul, ol { margin: 0 0 12px 24px; }
-    li { margin-bottom: 4px; }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    strong { color: #fff; }
-    /* ── Components ── */
-    .hero {
-      background: linear-gradient(135deg, #1a2540 0%, #1e1e2e 60%, #1a1a1a 100%);
-      border: 1px solid #334;
-      border-radius: 8px;
-      padding: 28px 32px;
-      margin-bottom: 32px;
-    }
-    .hero p { color: var(--muted); margin: 8px 0 0; }
-    code {
-      font-family: 'Cascadia Code', 'Consolas', monospace;
-      background: var(--code-bg);
-      border: 1px solid #333;
-      border-radius: 3px;
-      padding: 1px 5px;
-      font-size: 12px;
-      color: #c8d3f5;
-    }
-    pre {
-      background: var(--code-bg);
-      border: 1px solid #333;
-      border-radius: 6px;
-      padding: 16px 20px;
-      overflow-x: auto;
-      margin: 12px 0 16px;
-      font-family: 'Cascadia Code', 'Consolas', monospace;
-      font-size: 12px;
-      color: #c8d3f5;
-      line-height: 1.5;
-    }
-    .callout {
-      border-left: 3px solid var(--accent);
-      background: rgba(74,158,255,0.07);
-      border-radius: 0 6px 6px 0;
-      padding: 12px 16px;
-      margin: 16px 0;
-    }
-    .callout.warn {
-      border-left-color: var(--warn);
-      background: rgba(232,164,74,0.07);
-    }
-    .callout.ok {
-      border-left-color: var(--accent2);
-      background: rgba(120,217,124,0.07);
-    }
-    .callout p { margin: 0; }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin: 12px 0 20px;
-      font-size: 13px;
-    }
-    th {
-      background: var(--bg3);
-      border: 1px solid var(--border);
-      padding: 8px 12px;
-      text-align: left;
-      font-weight: 600;
-      color: var(--accent);
-    }
-    td {
-      border: 1px solid var(--border);
-      padding: 7px 12px;
-      vertical-align: top;
-    }
-    tr:nth-child(even) td { background: rgba(255,255,255,0.03); }
-    kbd {
-      display: inline-block;
-      background: var(--bg3);
-      border: 1px solid #888;
-      border-bottom: 2px solid #888;
-      border-radius: 4px;
-      padding: 1px 6px;
-      font-family: 'Cascadia Code', monospace;
-      font-size: 11px;
-      color: #eee;
-    }
-    hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
-    .format-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-      gap: 10px;
-      margin: 12px 0 20px;
-    }
-    .format-card {
-      background: var(--bg3);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 12px 14px;
-    }
-    .format-card .name { font-weight: 700; color: var(--accent); font-size: 13px; }
-    .format-card .desc { font-size: 11px; color: var(--muted); margin-top: 3px; }
-    footer {
-      margin-top: 60px;
-      padding-top: 20px;
-      border-top: 1px solid var(--border);
-      color: var(--muted);
-      font-size: 11px;
-    }
-  </style>
+  <title>lucid_viewer.py &mdash; LucidLabs ATX245 Viewer documentation</title>
+  <link rel="stylesheet" href="Cpp_CameraControl/assets/ATX245S_1.21.0.0_Documentation_English/html/_static/css/theme.css" type="text/css" />
+  <script src="Cpp_CameraControl/assets/ATX245S_1.21.0.0_Documentation_English/html/_static/js/modernizr.min.js"></script>
 </head>
-<body>
-<div class="wrapper">
 
-  <!-- ── Sidebar navigation ── -->
-  <nav>
-    <div class="logo">
-      <h2>LucidLabs Viewer</h2>
-      <p>ATX245 Image Viewer</p>
-    </div>
-    <span class="section-label">Getting Started</span>
-    <a href="#overview">Overview</a>
-    <a href="#opening">Opening Files</a>
-    <span class="section-label">Reference</span>
-    <a href="#formats">Pixel Formats</a>
-    <a href="#sidecar">Sidecar JSON</a>
-    <a href="#timestamps">Timestamps CSV</a>
-    <a href="#display">Display Options</a>
-    <a href="#correction">Field Correction</a>
-    <a href="#export">TIFF Export</a>
-    <a href="#keyboard">Keyboard Shortcuts</a>
-    <span class="section-label">Tools</span>
-    <a href="#tools-menu">Tools Menu</a>
-    <span class="section-label">About</span>
-    <a href="#troubleshooting">Troubleshooting</a>
-  </nav>
+<body class="wy-body-for-nav" role="document">
+  <div class="wy-grid-for-nav">
 
-  <!-- ── Main content ── -->
-  <main>
+    <!-- ── Sidebar ────────────────────────────────────────────────── -->
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search">
+          <a href="#" class="icon icon-home"> lucid_viewer</a>
+          <img src="Cpp_CameraControl/assets/ATX245S_1.21.0.0_Documentation_English/lucid-white-logo.png" class="logo" alt="Lucid Vision Labs" />
+          <div class="version">ATX245 Viewer</div>
+        </div>
 
-    <div class="hero">
-      <h1>LucidLabs ATX245 Viewer <span class="badge">User Manual</span></h1>
-      <p>A standalone image viewer for Lucid Vision Labs ATX245 mono-camera data — supports .raw,
-         .tiff, and .mp4/.avi files with automatic sidecar metadata loading.</p>
-    </div>
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          <ul>
+            <li class="toctree-l1"><a class="reference internal" href="#file-formats">Supported file formats</a></li>
+            <li class="toctree-l1"><a class="reference internal" href="#pixel-formats">Pixel formats</a></li>
+            <li class="toctree-l1"><a class="reference internal" href="#opening">Opening a file</a></li>
+            <li class="toctree-l1"><a class="reference internal" href="#navigation">Frame navigation</a></li>
+            <li class="toctree-l1"><a class="reference internal" href="#display">Display controls</a></li>
+            <li class="toctree-l1"><a class="reference internal" href="#correction">Field correction</a>
+              <ul>
+                <li class="toctree-l2"><a class="reference internal" href="#dark">Dark field</a></li>
+                <li class="toctree-l2"><a class="reference internal" href="#flat">Flat white field</a></li>
+                <li class="toctree-l2"><a class="reference internal" href="#pca">PCA background removal</a></li>
+                <li class="toctree-l2"><a class="reference internal" href="#blur-pca">Gaussian blur dual-resolution PCA</a></li>
+                <li class="toctree-l2"><a class="reference internal" href="#master-pca">Master / Universal PCA</a></li>
+              </ul>
+            </li>
+            <li class="toctree-l1"><a class="reference internal" href="#storing">Storing field references</a></li>
+            <li class="toctree-l1"><a class="reference internal" href="#export">Export</a>
+              <ul>
+                <li class="toctree-l2"><a class="reference internal" href="#tiff">TIFF stack export</a></li>
+                <li class="toctree-l2"><a class="reference internal" href="#gif">GIF export</a></li>
+              </ul>
+            </li>
+            <li class="toctree-l1"><a class="reference internal" href="#timestamps">Timestamps and trigger</a></li>
+            <li class="toctree-l1"><a class="reference internal" href="#fileinfo">File info panel</a></li>
+            <li class="toctree-l1"><a class="reference internal" href="#shortcuts">Keyboard shortcuts</a></li>
+            <li class="toctree-l1"><a class="reference internal" href="#naming">Directory naming conventions</a></li>
+            <li class="toctree-l1"><a class="reference internal" href="#settings">Settings persistence</a></li>
+            <li class="toctree-l1"><a class="reference internal" href="#deps">Dependencies</a></li>
+          </ul>
+        </div>
+      </div>
+    </nav>
 
-    <!-- Overview -->
-    <h2 id="overview">Overview</h2>
-    <p>The <strong>ATX245 Viewer</strong> is a PyQt6 / pyqtgraph application designed for reviewing
-       raw image data captured by Lucid Vision Labs cameras (and compatible GenICam-standard devices).
-       Key features:</p>
-    <ul>
-      <li>Lazy frame loading — only the current frame is held in memory (plus a small LRU cache)</li>
-      <li>Automatic pixel-format detection from filename or JSON sidecar</li>
-      <li>Timestamp overlay from an adjacent <code>timestamps.csv</code></li>
-      <li>Adjustable colormaps, auto-levels, and pyqtgraph histogram</li>
-      <li>Persistent window geometry and last-used settings</li>
-    </ul>
+    <!-- ── Main content ──────────────────────────────────────────── -->
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="top navigation">
+        <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+        <a href="#">lucid_viewer</a>
+      </nav>
 
-    <!-- Opening Files -->
-    <h2 id="opening">Opening Files</h2>
-    <p>Use <strong>File → Open file…</strong> (<kbd>Ctrl</kbd>+<kbd>O</kbd>) or the
-       <strong>Open image file…</strong> button in the sidebar to browse for a file.
-       Supported extensions:</p>
-    <table>
-      <thead><tr><th>Extension</th><th>Format</th><th>Notes</th></tr></thead>
-      <tbody>
-        <tr><td><code>.raw</code></td><td>Binary pixel data</td>
-            <td>Set <em>Width</em>, <em>Height</em>, and <em>Pixel format</em> before opening.
-                Frame count is inferred automatically from file size.</td></tr>
-        <tr><td><code>.tiff / .tif</code></td>
-            <td>TIFF (single or multi-frame)</td>
-            <td>Width/Height/format are read from TIFF metadata; sidebar values are ignored.</td></tr>
-        <tr><td><code>.mp4 / .avi</code></td><td>Video</td>
-            <td>Frames are decoded via OpenCV. Grayscale conversion is applied automatically.</td></tr>
-      </tbody>
-    </table>
+      <div class="wy-nav-content">
+        <div class="rst-content">
 
-    <h3>Frame Format Panel (sidebar)</h3>
-    <p>For <code>.raw</code> files you must configure the frame format before (or after) opening:</p>
-    <ul>
-      <li><strong>Pixel format</strong> — GenICam pixel format string (see <a href="#formats">Pixel Formats</a>).</li>
-      <li><strong>Width / Height</strong> — sensor dimensions in pixels. Default: 5328 × 4608 (ATX245 full sensor).</li>
-      <li><strong>Re-parse</strong> — re-reads the file with the current settings without a file dialog.</li>
-    </ul>
+          <div role="navigation" aria-label="breadcrumbs navigation">
+            <ul class="wy-breadcrumbs">
+              <li><a href="#">Docs</a> &raquo;</li>
+              <li>lucid_viewer.py &mdash; User Manual</li>
+            </ul>
+            <hr/>
+          </div>
 
-    <div class="callout">
-      <p>💡 If a JSON sidecar or a filename containing the format string (e.g. <code>capture_Mono12p.raw</code>)
-         is detected, the viewer fills in <em>Pixel format</em> and dimensions automatically.</p>
-    </div>
+          <div role="main" class="document">
+           <div itemprop="articleBody">
 
-    <!-- Pixel Formats -->
-    <h2 id="formats">Supported Pixel Formats</h2>
-    <div class="format-grid">
-      <div class="format-card"><div class="name">Mono8</div>
-        <div class="desc">8 bpp — 1 byte/pixel</div></div>
-      <div class="format-card"><div class="name">Mono10</div>
-        <div class="desc">10-bit LSB in 16-bit word — 2 bytes/pixel</div></div>
-      <div class="format-card"><div class="name">Mono10p</div>
-        <div class="desc">GenICam packed — 4 px / 5 bytes, LSB-first</div></div>
-      <div class="format-card"><div class="name">Mono10Packed</div>
-        <div class="desc">GigE packed — 4 px / 5 bytes, MSB-aligned</div></div>
-      <div class="format-card"><div class="name">Mono12</div>
-        <div class="desc">12-bit LSB in 16-bit word — 2 bytes/pixel</div></div>
-      <div class="format-card"><div class="name">Mono12p</div>
-        <div class="desc">GenICam packed — 2 px / 3 bytes, LSB-first</div></div>
-      <div class="format-card"><div class="name">Mono12Packed</div>
-        <div class="desc">GigE packed — 2 px / 3 bytes, MSB-aligned</div></div>
-      <div class="format-card"><div class="name">Mono16</div>
-        <div class="desc">16 bpp — 2 bytes/pixel, little-endian</div></div>
-    </div>
+<!-- ═══════════════════════════════════════════════════════════ -->
 
-    <div class="callout warn">
-      <p>⚠ <strong>Packed formats</strong> (Mono10p, Mono10Packed, Mono12p, Mono12Packed) require that
-         <code>Width × Height</code> yields an integer byte count per frame.
-         If the dimension is wrong the viewer will show an error.</p>
-    </div>
-
-    <!-- Sidecar JSON -->
-    <h2 id="sidecar">Sidecar JSON Metadata</h2>
-    <p>Place a <code>.json</code> file alongside your data file to pre-populate the viewer.
-       The viewer searches for (in order):</p>
-    <ol>
-      <li><code>&lt;datafile&gt;.json</code> — e.g. <code>capture.raw.json</code></li>
-      <li><code>&lt;stem&gt;.json</code> — e.g. <code>capture.json</code></li>
-      <li><code>metadata.json</code> in the same directory</li>
-    </ol>
-    <p>Supported keys:</p>
-    <pre>{
-  "width":            5328,
-  "height":           4608,
-  "pixel_format":     "Mono12p",
-  "fps":              30.0,
-  "acquisition_time": "2025-06-01 09:14:32",
-  "notes":            "Dark-field calibration run"
-}</pre>
-    <div class="callout ok">
-      <p>✔ Both <code>pixel_format</code> (new) and <code>pixelformat</code> (legacy) keys are accepted.
-         Encoding is auto-detected: UTF-8 BOM, UTF-16, and Latin-1 are all handled.</p>
-    </div>
-
-    <!-- Timestamps CSV -->
-    <h2 id="timestamps">Timestamps CSV</h2>
-    <p>If a <code>timestamps.csv</code> file is found in the same directory as the opened data file,
-       frame timestamps are shown in the frame label beneath the image.</p>
-    <h3>CSV format</h3>
-    <ul>
-      <li>One row per frame (header row optional).</li>
-      <li>The timestamp column is auto-detected — columns with sequential integer steps (frame index) are skipped.</li>
-      <li>Header names <code>timestamp</code>, <code>time</code>, <code>ts</code>, <code>ticks</code>,
-          <code>system</code>, <code>device</code>, or <code>t</code> (substring match) take priority.</li>
-      <li>Units are auto-scaled: absolute epoch values are converted to relative seconds; display unit
-          is chosen from <em>ms / s / min</em> based on the total span.</li>
-    </ul>
-    <p>Column header suffix hints (e.g. <code>device_ts_ns</code>, <code>_us</code>, <code>_ms</code>)
-       are used for pre-scaling before the automatic unit detection runs.</p>
-    <pre>frame,device_ts_ns,system_ts_us
-0,1717000000000000,1717000000000
-1,1717033333333,1717033333
-...</pre>
-
-    <!-- Display Options -->
-    <h2 id="display">Display Options</h2>
-    <h3>Colormaps</h3>
-    <p>Select from the <strong>Colormap</strong> dropdown in the sidebar:</p>
-    <table>
-      <thead><tr><th>Name</th><th>Description</th></tr></thead>
-      <tbody>
-        <tr><td><code>grey</code></td><td>Grayscale (default)</td></tr>
-        <tr><td><code>inferno</code>, <code>hot</code>, <code>plasma</code>, <code>magma</code>, <code>viridis</code></td>
-            <td>Matplotlib perceptual colormaps</td></tr>
-        <tr><td><code>CET-L1</code>, <code>CET-L4</code></td>
-            <td>Peter Kovesi perceptually-uniform linear maps</td></tr>
-      </tbody>
-    </table>
-    <h3>Levels</h3>
-    <p>Use the pyqtgraph histogram on the right to drag the level handles manually, or click
-       <strong>Auto levels</strong> in the sidebar to fit the display range to the current frame's
-       actual min/max.</p>
-    <p>Levels are set automatically on the first frame of each new file, then held fixed while
-       scrubbing — this prevents flickering during playback.</p>
-
-    <!-- Field Correction -->
-    <h2 id="correction">Field Correction &amp; Transmission</h2>
-    <p>The <strong>Correction</strong> panel in the sidebar applies flat-field correction using
-       reference frames captured under known illumination:</p>
-    <ul>
-      <li><strong>Dark field</strong> — finds the most recent <code>dark_field_*</code> folder in the
-          parent directory and averages all of its frames as the dark reference.</li>
-      <li><strong>White field</strong> — finds the most recent <code>white_field_*</code> folder and
-          averages all of its frames as the white (flood) reference.</li>
-    </ul>
-    <p>When both references are loaded, each pixel is converted to <strong>x-ray transmission</strong>:</p>
-    <pre>transmission = (data - dark) / (white - dark)</pre>
-    <p>With only one reference loaded the viewer falls back to <code>data / white</code> (white only)
-       or <code>data - dark</code> (dark only). Per-frame camera gain (from <code>frame_data.csv</code>)
-       is automatically compensated when the references were captured at a different gain.</p>
-
-    <div class="callout">
-      <p>💡 <strong>The displayed image now shows the true float transmission value</strong>, not a
-         rescaled integer. Click any pixel with the inspector to read its transmission directly
-         (e.g. <code>[x, y, 0.8423]</code>). Transmission is typically ≈0 (fully absorbing) to ≈1
-         (fully transmitting), and can slightly exceed that range due to noise.</p>
-    </div>
-
-    <div class="callout warn">
-      <p>⚠ If the open file already has correction baked in (its filename contains <code>_dark</code>
-         or <code>_white</code>), both correction checkboxes and the pixel mask are disabled — applying
-         either step again would be incorrect.</p>
-    </div>
-
-    <!-- TIFF Export -->
-    <h2 id="export">TIFF Export</h2>
-    <p>Use <strong>File → Export TIFF stack…</strong> (<kbd>Ctrl</kbd>+<kbd>E</kbd>) to write the
-       current stack to a multi-page TIFF. Acquisition metadata (source file, pixel format,
-       dimensions, FPS, timestamps, gains, exposures, line status, and the active correction) is
-       embedded in the TIFF.</p>
-
-    <h3>Transmission encoding &amp; the decode key</h3>
-    <p>To keep hundreds of frames from ballooning in size, corrected frames are stored as integer
-       codes (e.g. 12-bit, 0–4095) rather than raw floats. So the float transmission can be fully
-       recovered, each frame is mapped with its <strong>own per-frame minimum and maximum</strong>
-       transmission — computed during the single write pass, so there is no slow pre-analysis step.
-       Every frame therefore uses the full code range, and the per-frame min/max are recorded so the
-       mapping is reversible.</p>
-    <p>In the <strong>standard</strong> (non-ImageJ) TIFF, each page carries its own values in its
-       <code>ImageDescription</code>, and page 0 also records the decode convention in the
-       <code>correction</code> block:</p>
-    <pre>// page 0 ImageDescription
-"correction": {
-  "formula":  "transmission = (data - dark) / (white - dark)",
-  "code_max": 4095,
-  "decode":   "per frame i: transmission = code / code_max * (transmission_max[i] - transmission_min[i]) + transmission_min[i]",
-  "note":     "transmission_min/transmission_max are stored per page in each frame."
-}
-// every page (including page 0)
-{ "frame_index": 7, "transmission_min": -0.0123, "transmission_max": 0.9876, "code_max": 4095 }</pre>
-    <p>To recover physical transmission for a pixel in frame <code>i</code>, read that page's own
-       <code>transmission_min</code>/<code>transmission_max</code>:</p>
-    <pre>transmission = code / code_max * (transmission_max - transmission_min) + transmission_min</pre>
-    <div class="callout ok">
-      <p>✔ The round-trip is reversible to within one code step
-         (<code>(transmission_max − transmission_min) / code_max</code>). Because each frame is
-         scaled independently, compare absolute transmission between frames only after applying each
-         frame's own min/max.</p>
-    </div>
-    <div class="callout warn">
-      <p>⚠ In <strong>ImageJ-compatible</strong> mode the TIFF is written in the exact layout ImageJ
-         expects (no embedded extras), so the per-frame conversion factors are written to a
-         <strong>JSON sidecar</strong> named <code>&lt;name&gt;_transmission.json</code> next to the
-         file instead. It contains <code>transmission_min</code> and <code>transmission_max</code>
-         arrays (indexed by frame number) plus <code>code_max</code> and the decode formula. Per-frame
-         timestamp metadata is also not written in this mode.</p>
-    </div>
-    <pre>// &lt;name&gt;_transmission.json
-{
-  "transmission_min": [-0.0123, -0.0098, ...],
-  "transmission_max": [ 0.9876,  0.9912, ...],
-  "code_max": 4095,
-  "decode": "per frame i: transmission = code / code_max * (transmission_max[i] - transmission_min[i]) + transmission_min[i]"
-}</pre>
-
-    <h3>Large files (&gt; 4 GB) &amp; BigTIFF</h3>
-    <p>Standard exports automatically switch to <strong>BigTIFF</strong> once the stack exceeds 4 GB,
-       so there is no size ceiling. The <strong>ImageJ-compatible</strong> format, however, is
-       hard-capped at 4 GB and cannot be BigTIFF — an ImageJ-format file larger than that will not
-       open.</p>
-    <div class="callout ok">
-      <p>✔ If you request ImageJ mode for a stack larger than 4 GB, the viewer automatically falls
-         back to a standard BigTIFF (which ImageJ/Fiji opens via <strong>Bio-Formats</strong>) and
-         tells you it did so. In that case the per-frame transmission factors are embedded per page
-         in the TIFF, so no sidecar is produced.</p>
-    </div>
-
-    <!-- Keyboard Shortcuts -->
-    <h2 id="keyboard">Keyboard Shortcuts</h2>
-    <table>
-      <thead><tr><th>Key</th><th>Action</th></tr></thead>
-      <tbody>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>Open file</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>E</kbd></td><td>Export TIFF stack</td></tr>
-        <tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>Previous / Next frame</td></tr>
-        <tr><td><kbd>Home</kbd></td><td>Jump to first frame</td></tr>
-        <tr><td><kbd>End</kbd></td><td>Jump to last frame</td></tr>
-      </tbody>
-    </table>
-
-    <!-- Tools Menu -->
-    <h2 id="tools-menu">Tools Menu</h2>
-    <h3>Tools → Viewer</h3>
-    <p>Launches the <strong>Lucid Viewer</strong> batch script
-       (<code>lucid_viewer.bat</code>) using Windows <code>ShellExecute</code>.
-       This opens the associated camera-control or acquisition tool in a separate process;
-       the viewer application continues running normally.</p>
-
-    <!-- Troubleshooting -->
-    <h2 id="troubleshooting">Troubleshooting</h2>
-    <table>
-      <thead><tr><th>Symptom</th><th>Likely cause &amp; fix</th></tr></thead>
-      <tbody>
-        <tr>
-          <td>No complete frames fit in file</td>
-          <td>Width × Height or pixel format is wrong. Verify against the acquisition settings and click <strong>Re-parse</strong>.</td>
-        </tr>
-        <tr>
-          <td>Image looks scrambled / noise-like</td>
-          <td>Packed format mismatch (e.g. Mono12p vs Mono12Packed). Try the other variant.</td>
-        </tr>
-        <tr>
-          <td>TIFF / MP4 import fails</td>
-          <td><code>tifffile</code> / <code>zarr</code> or <code>opencv-python</code> not installed.
-              Run: <code>pip install tifffile zarr opencv-python</code></td>
-        </tr>
-        <tr>
-          <td>Colormap not found</td>
-          <td>CET maps require <code>colorcet</code>: <code>pip install colorcet</code></td>
-        </tr>
-        <tr>
-          <td>Timestamps ignored</td>
-          <td>The CSV must be named exactly <code>timestamps.csv</code> and be in the same folder as the data file.</td>
-        </tr>
-      </tbody>
-    </table>
-
-    <hr>
-    <footer>
-      <p>LucidLabs ATX245 Viewer &nbsp;|&nbsp; DCS Team &nbsp;|&nbsp;
-         Built with PyQt6 + pyqtgraph</p>
-    </footer>
-
-  </main>
+<div class="section" id="top">
+<h1>lucid_viewer.py<a class="headerlink" href="#top" title="Permalink">¶</a></h1>
+<p>A PyQt6 desktop viewer for LucidLabs ATX245 mono-camera acquisitions. Opens
+raw camera files, applies dark-field / white-field corrections (flat field or
+PCA-based background removal), and exports corrected stacks as TIFF or GIF.</p>
 </div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="file-formats">
+<h1>Supported file formats<a class="headerlink" href="#file-formats" title="Permalink">¶</a></h1>
+
+<table border="1" class="docutils">
+<colgroup><col width="20%"/><col width="80%"/></colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Extension</th><th class="head">How it is read</th></tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td><code class="docutils literal"><span class="pre">.raw</span></code></td><td>Binary blob; frame geometry and pixel format read from JSON sidecar or entered manually</td></tr>
+<tr class="row-odd"><td><code class="docutils literal"><span class="pre">.tiff</span></code> / <code class="docutils literal"><span class="pre">.tif</span></code></td><td>Multi-frame TIFF via <code class="docutils literal"><span class="pre">tifffile</span></code></td></tr>
+<tr class="row-even"><td><code class="docutils literal"><span class="pre">.mp4</span></code> / <code class="docutils literal"><span class="pre">.avi</span></code></td><td>Video via <code class="docutils literal"><span class="pre">opencv-python</span></code></td></tr>
+</tbody>
+</table>
+
+<div class="section" id="json-sidecar">
+<h2>JSON sidecar<a class="headerlink" href="#json-sidecar" title="Permalink">¶</a></h2>
+<p>When opening a <code class="docutils literal"><span class="pre">.raw</span></code> file the viewer searches for metadata in this order:</p>
+<ol class="arabic simple">
+<li><code class="docutils literal"><span class="pre">&lt;file&gt;.json</span></code> (e.g. <code class="docutils literal"><span class="pre">capture_Mono12p.raw.json</span></code>)</li>
+<li><code class="docutils literal"><span class="pre">&lt;stem&gt;.json</span></code> (e.g. <code class="docutils literal"><span class="pre">capture_Mono12p.json</span></code>)</li>
+<li><code class="docutils literal"><span class="pre">metadata.json</span></code> in the same folder</li>
+</ol>
+<p>Keys read: <code class="docutils literal"><span class="pre">width</span></code>, <code class="docutils literal"><span class="pre">height</span></code>, <code class="docutils literal"><span class="pre">pixel_format</span></code>
+(also <code class="docutils literal"><span class="pre">pixelformat</span></code> / <code class="docutils literal"><span class="pre">PixelFormat</span></code> for legacy sidecars),
+<code class="docutils literal"><span class="pre">fps</span></code>, <code class="docutils literal"><span class="pre">acquisition_time</span></code>, <code class="docutils literal"><span class="pre">notes</span></code>, <code class="docutils literal"><span class="pre">field_references</span></code>.</p>
+<p>If no sidecar is found the viewer infers the pixel format from the filename
+(e.g. a file containing <code class="docutils literal"><span class="pre">Mono12p</span></code> is parsed as Mono12p). Width/height
+default to the ATX245 full sensor (5328 &times; 4608).</p>
+</div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="pixel-formats">
+<h1>Pixel formats<a class="headerlink" href="#pixel-formats" title="Permalink">¶</a></h1>
+<p>All Lucid mono pixel formats are supported and unpacked to 16-bit internally:</p>
+
+<table border="1" class="docutils">
+<colgroup><col width="22%"/><col width="10%"/><col width="18%"/><col width="50%"/></colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Format</th><th class="head">Bits</th><th class="head">Bytes / pixel</th><th class="head">Encoding</th></tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>Mono8</td><td>8</td><td>1</td><td>&mdash;</td></tr>
+<tr class="row-odd"><td>Mono10</td><td>10</td><td>2</td><td>little-endian uint16</td></tr>
+<tr class="row-even"><td>Mono10p</td><td>10</td><td>1.25</td><td>PFNC: 4 pixels per 5 bytes</td></tr>
+<tr class="row-odd"><td>Mono10Packed</td><td>10</td><td>1.5</td><td>Lucid: 2 pixels per 3 bytes</td></tr>
+<tr class="row-even"><td>Mono12</td><td>12</td><td>2</td><td>little-endian uint16</td></tr>
+<tr class="row-odd"><td>Mono12p</td><td>12</td><td>1.5</td><td>USB3 Vision/PFNC, LSB-aligned</td></tr>
+<tr class="row-even"><td>Mono12Packed</td><td>12</td><td>1.5</td><td>GigE Vision, MSB-aligned</td></tr>
+<tr class="row-odd"><td>Mono16</td><td>16</td><td>2</td><td>little-endian uint16</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="opening">
+<h1>Opening a file<a class="headerlink" href="#opening" title="Permalink">¶</a></h1>
+<p><strong>File &rarr; Open file&hellip;</strong> (Ctrl+O) or click <strong>Open image file&hellip;</strong> in the sidebar.</p>
+<p>The <strong>Frame format</strong> group lets you set pixel format, width, and height
+before or after opening. After changing any of these, click <strong>Re-parse</strong> to
+re-read the current file with the new parameters without opening a dialog.</p>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="navigation">
+<h1>Frame navigation<a class="headerlink" href="#navigation" title="Permalink">¶</a></h1>
+<ul class="simple">
+<li><strong>Frame slider</strong> &mdash; scrub through frames; a tick marks the trigger frame.</li>
+<li><strong>&#8592; / &#8594;</strong> &mdash; step one frame backward / forward.</li>
+<li><strong>Home / End</strong> &mdash; jump to the first / last frame.</li>
+<li><strong>Space</strong> or <strong>&#9654; Play</strong> button &mdash; start/stop real-time playback at the file&rsquo;s native FPS.</li>
+</ul>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="display">
+<h1>Display controls<a class="headerlink" href="#display" title="Permalink">¶</a></h1>
+<p><strong>Colormap</strong> &mdash; choose any pyqtgraph or matplotlib colormap from the sidebar drop-down.</p>
+<p><strong>Auto levels</strong> &mdash; sets the display range to the 3rd&ndash;97th percentile of the
+current frame. Applied automatically when a new file is opened.</p>
+<p><strong>Pixel mask</strong> &mdash; overlays colour indicators on the image:</p>
+<ul class="simple">
+<li><strong>Red</strong> &mdash; saturated pixels (at or above the bit-depth maximum)</li>
+<li><strong>Yellow</strong> &mdash; dead pixels (value&nbsp;=&nbsp;0)</li>
+</ul>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="correction">
+<h1>Field correction<a class="headerlink" href="#correction" title="Permalink">¶</a></h1>
+<p>Corrections are controlled in the <strong>Correction</strong> panel in the sidebar. When
+correction is active the display shows 32-bit float <strong>x-ray transmission</strong>
+(values &asymp;&nbsp;0&ndash;1); raw sensor counts are shown otherwise.</p>
+
+<div class="section" id="dark">
+<h2>Dark field<a class="headerlink" href="#dark" title="Permalink">¶</a></h2>
+<p>Check <strong>Dark field</strong> to subtract a dark reference.</p>
+<p><strong>Auto-detection:</strong> on file open the viewer scans for a folder whose name
+contains <code class="docutils literal"><span class="pre">dark_field</span></code> among the siblings of the data folder and one level
+up. Multiple candidates are sorted by folder-name timestamp proximity.
+Only folders whose frames match the current width &times; height are accepted.</p>
+<p>When the dark reference was captured at a different gain, it is scaled:</p>
+<div class="highlight-default"><div class="highlight"><pre><span></span>dark_scaled = dark &times; 10^((data_gain &minus; dark_gain) / 20)</pre></div></div>
+</div>
+
+<div class="section" id="flat">
+<h2>Flat white field<a class="headerlink" href="#flat" title="Permalink">¶</a></h2>
+<p>Choose <strong>Flat field</strong> in the white-field combo and check <strong>White field</strong>.</p>
+<div class="highlight-default"><div class="highlight"><pre><span></span><span class="c1"># dark + white</span>
+transmission = (data &minus; dark) / (white &minus; dark)
+
+<span class="c1"># white only</span>
+transmission = data / white
+
+<span class="c1"># dark only</span>
+corrected = data &minus; dark</pre></div></div>
+<p><strong>Auto-detection:</strong> same timestamp-proximity logic as dark field, searching for
+folders whose names contain <code class="docutils literal"><span class="pre">white_field</span></code>.</p>
+</div>
+
+<div class="section" id="pca">
+<h2>PCA background removal<a class="headerlink" href="#pca" title="Permalink">¶</a></h2>
+<p>Choose <strong>PCA removal</strong> in the white-field combo and check <strong>White field</strong>.</p>
+<p>PCA builds an eigenvector basis from multiple white-field frames. For each
+data frame it estimates the beam background via projection and divides:</p>
+<div class="highlight-default"><div class="highlight"><pre><span></span>bg    = mean + V.T @ (V @ (data &minus; mean))
+trans = clip(data / max(bg, 0.5 &times; mean), 0, 10)</pre></div></div>
+<p>where <code class="docutils literal"><span class="pre">V</span></code> is the <code class="docutils literal"><span class="pre">(n_components, H&times;W)</span></code> matrix of eigenvectors from SVD
+of the white-field frames. The basis is computed in a background thread the
+first time it is needed; progress is shown in the correction status label.</p>
+<p><strong>N components</strong> spin box &mdash; number of PCA modes to subtract (1&ndash;20, default 5).
+More components capture more beam variation but risk subtracting sample signal.</p>
+<p>Click <strong>PCA settings&hellip;</strong> (also reachable via <em>Config &rarr; Set White Field &rarr; PCA&hellip;</em>)
+to open the full PCA configuration dialog.</p>
+</div>
+
+<div class="section" id="blur-pca">
+<h2>Gaussian blur dual-resolution PCA<a class="headerlink" href="#blur-pca" title="Permalink">¶</a></h2>
+<p>Enable <strong>Gaussian blur for temporal weight projection</strong> in the PCA Settings dialog.</p>
+<p><strong>Motivation:</strong> projecting a data frame directly onto the white-field basis can
+pick up sample-structure signal as spurious beam coefficients. Blurring the
+frame first suppresses high-frequency sample detail, so the projected
+coefficients reflect smooth beam variation only.</p>
+<div class="highlight-default"><div class="highlight"><pre><span></span>d_low  = blur_and_bin(data, &sigma;) &minus; mean_low   <span class="c1"># FFT blur + block downsample</span>
+coeffs = V_low @ d_low                          <span class="c1"># project in low-res space</span>
+bg     = mean + V_high.T @ coeffs              <span class="c1"># reconstruct at full resolution</span></pre></div></div>
+<p><code class="docutils literal"><span class="pre">V_low</span></code> and <code class="docutils literal"><span class="pre">V_high</span></code> are eigenvector matrices computed on blurred and
+full-resolution white frames respectively; they correspond row-by-row to the
+same mode index. The Gaussian blur is FFT-accelerated
+(O(H&sdot;W&sdot;log(H&sdot;W))); the kernel is built once in frequency space and
+cached. Downsampling factor B&nbsp;=&nbsp;min(16,&nbsp;max(1,&nbsp;&lfloor;&sigma;&nbsp;/&nbsp;50&rfloor;)).</p>
+<p><strong>Blur sigma</strong> (default 400&nbsp;px) should be much larger than the features you
+want to suppress. 200&ndash;600&nbsp;px covers typical cell sizes on a 5&nbsp;Mpx sensor.</p>
+</div>
+
+<div class="section" id="master-pca">
+<h2>Master / Universal PCA<a class="headerlink" href="#master-pca" title="Permalink">¶</a></h2>
+<p>Enable <strong>Universal mode (master no-cell basis)</strong> in the PCA Settings dialog.</p>
+<p><strong>Why:</strong> the x-ray cell changes between experiments, shifting the mean
+white-field image. Universal PCA avoids a full SVD recomputation for every cell:
+a single master basis is computed once from a cell-free capture and then adapted
+per-experiment.</p>
+<p><strong>Adaptation math:</strong></p>
+<div class="highlight-default"><div class="highlight"><pre><span></span>T_cell    = W_cell / W_master            <span class="c1"># per-pixel gain map</span>
+E_cell[i] = T_cell &times; E_master[i]        <span class="c1"># scale each eigenvector</span>
+E_cell[i] /= |E_cell[i]|                <span class="c1"># row-normalize</span></pre></div></div>
+<p>When Gaussian blur is also active, the low-resolution components are adapted
+identically:
+<code class="docutils literal"><span class="pre">Q_cell[i] = (T_cell_low &times; Q_master[i]) / |&hellip;|</span></code>.</p>
+<p><strong>Setting the master folder &mdash; Config &rarr; Set White Field &rarr; Master PCA&hellip;</strong></p>
+<p>The viewer also <strong>auto-detects</strong> the master folder when Universal mode is first
+activated: it walks up to 4 directory levels searching for a sibling folder
+whose name contains <code class="docutils literal"><span class="pre">_master</span></code>. Timestamp-proximity sorting picks the closest
+match. The auto-detected path is saved to settings and shown in the status label.</p>
+<p><strong>Cell white field in Universal mode:</strong> the viewer prefers a
+<code class="docutils literal"><span class="pre">white_field</span></code> folder that does <em>not</em> contain <code class="docutils literal"><span class="pre">_master</span></code> in its name.
+Falls back to any matching folder if none is found.</p>
+<p><strong>Tooltip:</strong> after successful cell adaptation, hovering the <strong>&#10003; White</strong> info
+label shows both the master folder path and the cell white-field folder path.</p>
+</div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="storing">
+<h1>Storing field references<a class="headerlink" href="#storing" title="Permalink">¶</a></h1>
+<p>Once the desired correction is active, click <strong>Store</strong> in the Correction panel.
+The current folder paths are written into the file&rsquo;s sidecar JSON under
+<code class="docutils literal"><span class="pre">field_references</span></code>. On the next open of the same file the same correction is
+applied automatically &mdash; no manual setup needed.</p>
+<p>Keys written: <code class="docutils literal"><span class="pre">dark_folder</span></code>, <code class="docutils literal"><span class="pre">white_folder</span></code>,
+<code class="docutils literal"><span class="pre">white_pca_folder</span></code>, <code class="docutils literal"><span class="pre">white_pca_master_folder</span></code>,
+<code class="docutils literal"><span class="pre">pca_universal</span></code>, <code class="docutils literal"><span class="pre">white_mode</span></code>.</p>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="export">
+<h1>Export<a class="headerlink" href="#export" title="Permalink">¶</a></h1>
+
+<div class="section" id="tiff">
+<h2>TIFF stack export<a class="headerlink" href="#tiff" title="Permalink">¶</a></h2>
+<p><strong>File &rarr; Export TIFF stack&hellip;</strong> (Ctrl+E). Requires <code class="docutils literal"><span class="pre">tifffile</span></code>.</p>
+<p>All frames are exported with the active correction applied. Corrected frames are
+written as <strong>float32</strong>; uncorrected frames as <strong>uint16</strong>. The output filename is
+auto-suggested with a suffix indicating the active correction
+(<code class="docutils literal"><span class="pre">_pca</span></code>, <code class="docutils literal"><span class="pre">_dark_pca</span></code>, <code class="docutils literal"><span class="pre">_dark_white</span></code>, etc.).</p>
+<p><strong>Export settings &mdash; Config &rarr; Export settings&hellip;</strong></p>
+<ul class="simple">
+<li><strong>Compression</strong> &mdash; None / LZW / ZSTD. ZSTD gives the best ratio for
+float32 data; LZW is good for uint16. None gives maximum read speed.</li>
+<li><strong>ImageJ mode</strong> &mdash; writes an ImageJ-compatible TIFF. Automatically falls
+back to standard BigTIFF for stacks &gt;&nbsp;3.9&nbsp;GB (the ImageJ hard limit).
+Fiji opens BigTIFF files via Bio-Formats.</li>
+</ul>
+<p>A JSON sidecar is written alongside the TIFF containing: source file, pixel
+format, frame count, FPS, timestamps, gains, exposures, and correction
+parameters.</p>
+<div class="admonition note">
+<p class="first admonition-title">Note</p>
+<p class="last">Stacks larger than 4&nbsp;GB are automatically written as BigTIFF regardless of
+the ImageJ mode setting.</p>
+</div>
+</div>
+
+<div class="section" id="gif">
+<h2>GIF export<a class="headerlink" href="#gif" title="Permalink">¶</a></h2>
+<p><strong>File &rarr; Export GIF&hellip;</strong> (Ctrl+G). Requires <code class="docutils literal"><span class="pre">Pillow</span></code>.</p>
+<ul class="simple">
+<li><strong>Frame step</strong> &mdash; export every Nth frame (1&nbsp;=&nbsp;all frames).</li>
+<li><strong>Scale</strong> &mdash; resize factor (e.g. 0.25 for quarter resolution).</li>
+<li><strong>FPS</strong> &mdash; playback speed of the output GIF.</li>
+</ul>
+<p>The current display levels (brightness/contrast window) are applied when
+rendering each frame, so what you see is what you get in the GIF.</p>
+</div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="timestamps">
+<h1>Timestamps and trigger<a class="headerlink" href="#timestamps" title="Permalink">¶</a></h1>
+<p>Per-frame timing is read from <code class="docutils literal"><span class="pre">frame_data.csv</span></code> (or <code class="docutils literal"><span class="pre">timestamps.csv</span></code>) in the
+same folder. The timestamp column is auto-detected by header keyword
+(<code class="docutils literal"><span class="pre">timestamp / time / ts / ticks / device / system</span></code>) and unit suffix
+(<code class="docutils literal"><span class="pre">_ns</span></code>, <code class="docutils literal"><span class="pre">_us</span></code>, <code class="docutils literal"><span class="pre">_ms</span></code>, <code class="docutils literal"><span class="pre">_s</span></code>).</p>
+<p>The viewer reads the <code class="docutils literal"><span class="pre">line_status_all</span></code> column (a binary string, e.g.
+<code class="docutils literal"><span class="pre">00000101</span></code>). The configurable <strong>trigger bit</strong> (default: bit 2, 3rd bit
+from the right) marks the first frame where that bit goes high as <strong>t&nbsp;=&nbsp;0</strong>.
+Frames before the trigger have negative timestamps; frames after have positive
+ones. Without a trigger, times are relative to the first frame.</p>
+<p><strong>Config &rarr; Trigger settings&hellip;</strong> &mdash; change which bit is used as the trigger.</p>
+<div class="highlight-default"><div class="highlight"><pre><span></span>frame_index,timestamp_ns,gain_db,exposure_us,line_status_all
+0,3337917961128,0.0,101.88,00000001
+1,3337927961128,0.0,101.88,00000001
+2,3337937961128,0.0,101.88,00000101   &larr; trigger: t = 0 ms
+3,3337947961128,0.0,101.88,00000101</pre></div></div>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="fileinfo">
+<h1>File info panel<a class="headerlink" href="#fileinfo" title="Permalink">¶</a></h1>
+
+<table border="1" class="docutils">
+<colgroup><col width="20%"/><col width="80%"/></colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Field</th><th class="head">Content</th></tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>Folder</td><td>Parent directory name</td></tr>
+<tr class="row-odd"><td>File</td><td>Filename</td></tr>
+<tr class="row-even"><td>Format</td><td>Resolved pixel format</td></tr>
+<tr class="row-odd"><td>Frames</td><td>Total frame count</td></tr>
+<tr class="row-even"><td>FPS</td><td>From sidecar or inferred from timestamps</td></tr>
+<tr class="row-odd"><td>Size</td><td>Width &times; Height (pixels)</td></tr>
+<tr class="row-even"><td>Acquired</td><td>Acquisition timestamp from sidecar</td></tr>
+<tr class="row-odd"><td>Notes</td><td>Free-text notes from sidecar</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="shortcuts">
+<h1>Keyboard shortcuts<a class="headerlink" href="#shortcuts" title="Permalink">¶</a></h1>
+
+<table border="1" class="docutils">
+<colgroup><col width="25%"/><col width="75%"/></colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Key</th><th class="head">Action</th></tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td>Ctrl+O</td><td>Open file</td></tr>
+<tr class="row-odd"><td>Ctrl+E</td><td>Export TIFF stack</td></tr>
+<tr class="row-even"><td>Ctrl+G</td><td>Export GIF</td></tr>
+<tr class="row-odd"><td>&#8592; / &#8594;</td><td>Step one frame backward / forward</td></tr>
+<tr class="row-even"><td>Home</td><td>Jump to first frame</td></tr>
+<tr class="row-odd"><td>End</td><td>Jump to last frame</td></tr>
+<tr class="row-even"><td>Space</td><td>Toggle playback</td></tr>
+<tr class="row-odd"><td>F1</td><td>Open this manual in browser</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="naming">
+<h1>Directory naming conventions<a class="headerlink" href="#naming" title="Permalink">¶</a></h1>
+<p>Auto-detection searches folder names for these keywords:</p>
+
+<table border="1" class="docutils">
+<colgroup><col width="38%"/><col width="62%"/></colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Folder name contains</th><th class="head">Used as</th></tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td><code class="docutils literal"><span class="pre">dark_field</span></code></td><td>Dark field reference</td></tr>
+<tr class="row-odd"><td><code class="docutils literal"><span class="pre">white_field</span></code></td><td>White field reference (flat or PCA)</td></tr>
+<tr class="row-even"><td><code class="docutils literal"><span class="pre">white_field</span></code> but not <code class="docutils literal"><span class="pre">_master</span></code></td><td>Cell white field in Universal PCA mode</td></tr>
+<tr class="row-odd"><td><code class="docutils literal"><span class="pre">_master</span></code></td><td>Master (cell-free) white field for Universal PCA</td></tr>
+</tbody>
+</table>
+
+<p>Search order: siblings of the data file&rsquo;s folder first, then one level up.
+The closest-by-timestamp match is always preferred.</p>
+<p>Example layout:</p>
+<div class="highlight-default"><div class="highlight"><pre><span></span>experiment_root/
+  20250501_120000_master_white_field/   &larr; master (cell-free) white field
+  20250501_133000_dark_field/           &larr; dark field for session
+  20250501_133000_white_field/          &larr; shared white field (flat mode)
+  20250501_140000_cell_A/
+    capture_Mono12p.raw
+    metadata.json
+    frame_data.csv
+    white_field_20250501_140000/        &larr; cell A white field (Universal PCA)
+  20250501_153000_cell_B/
+    capture_Mono12p.raw
+    metadata.json
+    frame_data.csv
+    white_field_20250501_153000/        &larr; cell B white field (Universal PCA)</pre></div></div>
+<p>With Universal PCA active and cell A open, the viewer finds
+<code class="docutils literal"><span class="pre">20250501_120000_master_white_field</span></code> as the master folder and
+<code class="docutils literal"><span class="pre">white_field_20250501_140000</span></code> as the cell white field.</p>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="settings">
+<h1>Settings persistence<a class="headerlink" href="#settings" title="Permalink">¶</a></h1>
+<p>All preferences are saved via <code class="docutils literal"><span class="pre">QSettings</span></code> (Windows Registry /
+platform-native store) and restored on next launch:</p>
+<ul class="simple">
+<li>Last opened file path</li>
+<li>Pixel format, width, height</li>
+<li>Colormap</li>
+<li>PCA blur enabled / blur sigma</li>
+<li>PCA Universal mode / master folder path</li>
+<li>Export compression / ImageJ mode</li>
+<li>Trigger bit</li>
+</ul>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────── -->
+<div class="section" id="deps">
+<h1>Dependencies<a class="headerlink" href="#deps" title="Permalink">¶</a></h1>
+<div class="highlight-bash"><div class="highlight"><pre><span></span>pip install PyQt6 pyqtgraph numpy scipy tifffile opencv-python pillow</pre></div></div>
+
+<table border="1" class="docutils">
+<colgroup><col width="25%"/><col width="75%"/></colgroup>
+<thead valign="bottom">
+<tr class="row-odd"><th class="head">Package</th><th class="head">Required for</th></tr>
+</thead>
+<tbody valign="top">
+<tr class="row-even"><td><code class="docutils literal"><span class="pre">PyQt6</span></code></td><td>UI framework</td></tr>
+<tr class="row-odd"><td><code class="docutils literal"><span class="pre">pyqtgraph</span></code></td><td>Image display and histogram</td></tr>
+<tr class="row-even"><td><code class="docutils literal"><span class="pre">numpy</span></code></td><td>All array math</td></tr>
+<tr class="row-odd"><td><code class="docutils literal"><span class="pre">scipy</span></code></td><td>FFT-accelerated Gaussian blur (PCA path)</td></tr>
+<tr class="row-even"><td><code class="docutils literal"><span class="pre">tifffile</span></code></td><td>TIFF reading and TIFF stack export</td></tr>
+<tr class="row-odd"><td><code class="docutils literal"><span class="pre">opencv-python</span></code></td><td>MP4/AVI video reading</td></tr>
+<tr class="row-even"><td><code class="docutils literal"><span class="pre">pillow</span></code></td><td>GIF export</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+
+           </div>
+          </div>
+
+          <footer>
+            <hr/>
+            <div role="contentinfo">
+              <p>&copy; Copyright 2025, Lucid Vision Labs / WSU XRay Lab.</p>
+            </div>
+          </footer>
+
+        </div><!-- rst-content -->
+      </div><!-- wy-nav-content -->
+    </section>
+
+  </div><!-- wy-grid-for-nav -->
+
+  <script type="text/javascript" src="Cpp_CameraControl/assets/ATX245S_1.21.0.0_Documentation_English/html/_static/jquery.js"></script>
+  <script type="text/javascript" src="Cpp_CameraControl/assets/ATX245S_1.21.0.0_Documentation_English/html/_static/underscore.js"></script>
+  <script type="text/javascript" src="Cpp_CameraControl/assets/ATX245S_1.21.0.0_Documentation_English/html/_static/doctools.js"></script>
+  <script type="text/javascript" src="Cpp_CameraControl/assets/ATX245S_1.21.0.0_Documentation_English/html/_static/js/theme.js"></script>
+
 </body>
 </html>

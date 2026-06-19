@@ -695,8 +695,8 @@
                 <h2>7 — Capturing Background Fields</h2>
 
                 <p>
-                    Background correction removes fixed-pattern noise (dark current) and illumination non-uniformity
-                    (flat-field). The standard formula applied in post-processing is:
+                    Background correction removes fixed-pattern noise (dark current) and illumination non-uniformity.
+                    The standard flat-field formula applied in post-processing is:
                 </p>
 
                 <p style="text-align:center; font-size:17px; font-family:'Courier New', monospace;
@@ -704,31 +704,122 @@
                     corrected = (data − dark) / (white − dark)
                 </p>
 
+                <p>
+                    For full details on all correction modes (flat-field, PCA removal, and Master PCA), see
+                    <a href="manual.html#field-correction" style="color:#1976D2;">User Manual → White Field Division</a>.
+                </p>
+
+                <h3>Dark Field — Required Rules</h3>
+
                 <ul class="checklist">
                     <li>
-                        <strong>Dark field:</strong> Block all light reaching the sensor (lens cap or shutter).
-                        Go to <em>Tools → Capture White/Dark Field</em> and capture the dark field. This measures
-                        the camera's thermal / electronic offset at the current exposure and gain settings.
+                        <strong>Capture a dark field at the start of every session</strong> and whenever the
+                        camera's exposure time, gain, or pixel format changes — dark current scales with
+                        these settings and a stale dark field introduces a systematic offset.
+                    </li>
+                    <li class="warn-step">
+                        <strong>Recapture the dark field any time the ROI changes.</strong>
+                        The dark-current pattern is position-dependent — a dark field captured at one
+                        <code>OffsetX</code> / <code>OffsetY</code> / <code>Width</code> / <code>Height</code>
+                        is not valid for a different ROI, even at the same gain and exposure.
                     </li>
                     <li>
-                        <strong>White field:</strong> Illuminate the scene uniformly (remove sample, use a
-                        diffuser or blank slide). Capture the white field from the same menu. This measures the
-                        illumination pattern and pixel-to-pixel sensitivity variation.
-                    </li>
-                    <li>
-                        Both fields are saved as averaged images in the output folder. Capture them at the
-                        <em>same ExposureTime, Gain, PixelFormat, and ROI</em> as your data — the correction
-                        is meaningless otherwise.
-                    </li>
-                    <li>
-                        If acquisition conditions change (different exposure, different ROI), recapture both fields.
+                        Block all light reaching the sensor (lens cap, closed shutter, or beam off).
+                        Capture via <em>Tools → Capture White/Dark Field</em>. The result is saved as an
+                        averaged TIFF in a <code>dark_field_*</code> folder alongside your data.
                     </li>
                 </ul>
 
+                <h3>White Field — Required Rules</h3>
+
+                <ul class="checklist">
+                    <li>
+                        <strong>Capture at least one white field per experiment</strong> (i.e., per sample / ROI /
+                        gain combination). With the beam on and no sample in the field of view, capture a
+                        white field from <em>Tools → Capture White/Dark Field</em>. This is the minimum needed
+                        for flat-field correction.
+                    </li>
+                    <li>
+                        Like the dark field, the white field must be captured at the
+                        <em>same ExposureTime, Gain, PixelFormat, and ROI</em> as your data.
+                        If any of these change, recapture the white field.
+                    </li>
+                    <li class="warn-step">
+                        <strong>Recapture the white field any time the ROI changes.</strong>
+                        The beam profile and scintillator efficiency vary across the field of view — a white
+                        field captured at one ROI position is not valid at another.
+                    </li>
+                </ul>
+
+                <h3>PCA-Based Correction — Additional White Field Requirements</h3>
+
+                <p>
+                    Flat-field correction removes pixel-to-pixel sensitivity variations but cannot account for
+                    slow spatial drift in the x-ray beam profile. PCA-based correction models and removes these
+                    spatial variations. Choose one of the two approaches below based on whether you need the
+                    Master PCA two-step workflow or a simpler per-experiment capture:
+                </p>
+
+                <div class="info">
+                    <strong>Option A — Master PCA mode</strong> (shared beam basis + per-experiment cell correction, two capture steps):
+                    <ul style="margin-top:8px; margin-bottom:0;">
+                        <li>
+                            <strong>Step 1 — Master reference (once per ROI):</strong> With the beam on and
+                            <em>no cell</em> in the field of view, capture a master white field via
+                            <em>Tools → Capture Master PCA Field</em>. The app acquires 500 frames or 5 s,
+                            whichever is longer — this large frame count is intentional, as the master basis
+                            only needs to be computed once per ROI and benefits from a high-quality PCA.
+                            The result is stored in a <code>*_master*</code> folder and does not need to be
+                            recaptured unless the ROI changes.
+                        </li>
+                        <li>
+                            <strong>Step 2 — Per-experiment cell reference:</strong> With the beam on and the
+                            <em>cell in place</em>, capture a white field via
+                            <em>Tools → Capture White Field</em> (100 frames or 5 s, whichever is longer).
+                            The viewer uses this to adapt the master eigenvectors to the current beam
+                            conditions <em>and</em> to divide away the static cell background — removing
+                            both beam non-uniformity and the cell window's fixed absorption pattern.
+                        </li>
+                        <li>
+                            See <a href="manual.html#field-master" style="color:#0D47A1;">Manual → Master PCA</a>
+                            for the eigenvector adaptation math.
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="info">
+                    <strong>Option B — Per-experiment PCA mode</strong> (simpler; no master required):
+                    <ul style="margin-top:8px; margin-bottom:0;">
+                        <li>
+                            With the beam on and the <strong>cell in place</strong>, capture a multi-frame
+                            white field via <em>Tools → Capture White Field</em> (100 frames or 5 s,
+                            whichever is longer). PCA is computed fresh from this sequence for each
+                            experiment — no master folder is needed.
+                        </li>
+                        <li>
+                            Because the frames are captured with the cell in place, the PCA basis encodes
+                            both the spatially varying beam profile <em>and</em> the static cell background.
+                            Dividing by the reconstructed PCA background removes both, leaving only dynamic
+                            sample features. Use this option when the additional one-time master capture is
+                            not needed or the ROI changes frequently.
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="note">
+                    <strong>Why cell-in-place matters:</strong> The goal of PCA removal is to divide away
+                    everything spatially fixed — beam profile, cell window absorption, scintillator
+                    inhomogeneity — while preserving dynamic sample features. Capturing white fields
+                    <em>with</em> the cell in place encodes all of these static components into the PCA
+                    basis, so the division leaves only the moving or changing parts of the sample.
+                    A no-cell white field would divide away the beam but leave cell background uncorrected.
+                </div>
+
                 <div class="tip">
-                    <strong>Tip:</strong> Capture the white field <em>before</em> placing the sample, and capture
-                    the dark field <em>without moving anything else</em> — stray light or mechanical shift between
-                    the two captures introduces residual error.
+                    <strong>Capture order:</strong> Capture the white field <em>before</em> placing the sample
+                    (or before introducing the dynamic event), and capture the dark field
+                    <em>without moving anything else</em>. Stray light or mechanical shift between the two
+                    captures introduces residual error in the correction.
                 </div>
             </section>
 
