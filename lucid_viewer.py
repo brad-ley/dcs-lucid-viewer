@@ -1197,11 +1197,14 @@ class CellAdaptWorker(QThread):
     """Adapt master PCA eigenvectors for a new sample cell without rerunning SVD.
 
     Algorithm:
-      T_cell     = cell_mean / master_mean                (native-res scaling)
-      E_high_cell = E_high * T_cell                       (adapted synthesis basis)
-      T_cell_low = blur(cell_mean) / master_mean_low      (blurred-space scaling)
-      E_low_cell  = E_low  * T_cell_low
-      Q_low, _   = qr(E_low_cell.T)  → Q_low.T           (re-orthogonalize)
+      T_cell        = cell_mean / master_mean              (native-res scaling)
+      E_high_scaled = E_high * T_cell                      (scaled, non-orthogonal)
+      U, _, Vt      = svd(E_high_scaled)                   (thin SVD)
+      E_high_cell   = Vt                                   (orthonormal rows; U is the component rotation)
+      T_cell_low    = blur(cell_mean) / master_mean_low    (blurred-space scaling)
+      E_low_scaled  = E_low * T_cell_low
+      E_low_aligned = U.T @ E_low_scaled                   (same rotation → preserves correspondence)
+      Q_low         = E_low_aligned / row_norms            (unit-norm low-res analysis basis)
     """
 
     adapt_done     = pyqtSignal(object, object, object, object)  # cell_mean, E_high_cell, mu_low_cell, Q_low
@@ -1242,7 +1245,15 @@ class CellAdaptWorker(QThread):
             T_cell    = cell_mean / mu_master                           # (H*W,)
 
             E_high      = self._master_components                       # (n, H*W)
-            E_high_cell = np.ascontiguousarray((E_high * T_cell).astype(np.float32))
+            E_high_scaled = (E_high * T_cell).astype(np.float32)        # (n, H*W)
+
+            # Re-orthogonalize via thin SVD so the projection is a proper orthogonal
+            # projection rather than an oblique one.  Vt rows are orthonormal in
+            # pixel space; U encodes the rotation applied to the component ordering
+            # and is reused below to keep the low-res basis in correspondence.
+            self.adapt_progress.emit('Cell adaptation: re-orthogonalizing components…')
+            U, _, E_high_cell_vt = np.linalg.svd(E_high_scaled, full_matrices=False)
+            E_high_cell = np.ascontiguousarray(E_high_cell_vt.astype(np.float32))  # (n, H*W)
 
             if (self._blur_sigma > 0
                     and self._master_mean_low is not None
@@ -1253,12 +1264,15 @@ class CellAdaptWorker(QThread):
                 mu_low_cell = _blur_and_bin(cell_mean_2d, self._blur_sigma, n_low)
                 mu_master_low = np.maximum(self._master_mean_low, np.float32(1e-3))
                 T_cell_low    = mu_low_cell / mu_master_low             # (N_low,)
-                E_low_cell    = self._master_components_low * T_cell_low  # (n, N_low)
+                E_low_scaled  = self._master_components_low * T_cell_low  # (n, N_low)
 
-                self.adapt_progress.emit('Cell adaptation: normalizing low-res components…')
-                norms_low = np.linalg.norm(E_low_cell, axis=1, keepdims=True)
+                # Apply the same component-space rotation as E_high_cell so that
+                # Q_low[i] and E_high_cell[i] still represent the same beam mode.
+                self.adapt_progress.emit('Cell adaptation: aligning low-res components…')
+                E_low_aligned = (U.T @ E_low_scaled).astype(np.float32)  # (n, N_low)
+                norms_low = np.linalg.norm(E_low_aligned, axis=1, keepdims=True)
                 np.maximum(norms_low, np.float32(1e-10), out=norms_low)
-                Q_low = np.ascontiguousarray((E_low_cell / norms_low).astype(np.float32))  # (n, N_low)
+                Q_low = np.ascontiguousarray((E_low_aligned / norms_low).astype(np.float32))  # (n, N_low)
 
                 self.adapt_done.emit(cell_mean, E_high_cell, mu_low_cell, Q_low)
             else:
