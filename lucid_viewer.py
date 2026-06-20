@@ -12,6 +12,7 @@ compute bytes-per-frame and derive the frame count automatically.
 
 import sys
 import os
+import tempfile
 import re
 import json
 import time
@@ -4519,26 +4520,51 @@ class LucidViewer(ViewerMixin, QMainWindow):
         super().closeEvent(event)
 
 
-_DARK_STYLE = _DARK_STYLE_BASE + """
+def _write_arrow_svgs():
+    """Write light-colored SVG arrows to a temp dir for QSS; return path dict."""
+    d = os.path.join(tempfile.gettempdir(), 'lucidvision_qss_arrows')
+    os.makedirs(d, exist_ok=True)
+    defs = {
+        'up':     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 5"><polygon points="4,0 8,5 0,5" fill="#aaaaaa"/></svg>',
+        'up_hov': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 5"><polygon points="4,0 8,5 0,5" fill="#dddddd"/></svg>',
+        'dn':     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 5"><polygon points="0,0 8,0 4,5" fill="#aaaaaa"/></svg>',
+        'dn_hov': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 5"><polygon points="0,0 8,0 4,5" fill="#dddddd"/></svg>',
+    }
+    paths = {}
+    for name, svg in defs.items():
+        p = os.path.join(d, f'arrow_{name}.svg')
+        try:
+            with open(p, 'w', encoding='utf-8') as fh:
+                fh.write(svg)
+            paths[name] = p.replace('\\', '/')
+        except OSError:
+            paths[name] = ''
+    return paths
+
+
+def _spinbox_qss(sel, p):
+    return (
+        f"{sel} {{ background: #3c3f41; color: #dddddd;"
+        f" border: 1px solid #555; border-radius: 3px; padding: 2px 4px; }}\n"
+        f"{sel}::up-button, {sel}::down-button {{"
+        f" background: #4c5052; border: none; width: 16px; }}\n"
+        f"{sel}::up-button:hover, {sel}::down-button:hover {{ background: #5c6062; }}\n"
+        f"{sel}::up-arrow   {{ image: url({p['up']});     width: 8px; height: 5px; }}\n"
+        f"{sel}::down-arrow {{ image: url({p['dn']});     width: 8px; height: 5px; }}\n"
+        f"{sel}::up-arrow:hover   {{ image: url({p['up_hov']}); }}\n"
+        f"{sel}::down-arrow:hover {{ image: url({p['dn_hov']}); }}\n"
+    )
+
+
+_arrow_svg_paths = _write_arrow_svgs()
+
+_DARK_STYLE = (_DARK_STYLE_BASE + """
 QSlider::groove:horizontal { height: 4px; background: #444; border-radius: 2px; }
 QSlider::handle:horizontal { background: #888; border: 1px solid #aaa;
     width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }
 QSlider::handle:horizontal:hover { background: #aaa; }
-QSpinBox {
-    background: #3c3f41; color: #dddddd;
-    border: 1px solid #555; border-radius: 3px; padding: 2px 4px; }
-QSpinBox::up-button, QSpinBox::down-button {
-    background: #4c5052; border: none; width: 16px; }
-QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: #5c6062; }
-QSpinBox::up-arrow   { image: none; border-left: 4px solid transparent;
-    border-right: 4px solid transparent; border-bottom: 5px solid #aaaaaa;
-    width: 0; height: 0; }
-QSpinBox::down-arrow { image: none; border-left: 4px solid transparent;
-    border-right: 4px solid transparent; border-top: 5px solid #aaaaaa;
-    width: 0; height: 0; }
-QSpinBox::up-arrow:hover   { border-bottom-color: #dddddd; }
-QSpinBox::down-arrow:hover { border-top-color: #dddddd; }
-"""
+""" + _spinbox_qss('QSpinBox', _arrow_svg_paths)
+    + _spinbox_qss('QDoubleSpinBox', _arrow_svg_paths))
 
 if __name__ == '__main__':
     # Tell Windows to use our AppUserModelID so the taskbar shows our icon
