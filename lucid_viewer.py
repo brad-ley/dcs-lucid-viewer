@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QComboBox,
     QGroupBox, QGridLayout, QSpinBox, QFormLayout,
     QSplitter, QMessageBox, QSlider, QCheckBox, QSizePolicy,
-    QDialog, QProgressBar, QDialogButtonBox, QFrame,
+    QDialog, QProgressBar, QDialogButtonBox, QFrame, QMenu,
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon
@@ -1617,6 +1617,211 @@ class _PcaSettingsDialog(QDialog):
         return self._universal_chk.isChecked()
 
 
+# ── PCA eigenvector viewer ────────────────────────────────────────────────────
+
+class _PcaTemporalWeightWorker(QThread):
+    """Compute per-frame projection coefficients for ALL PCA components in one pass."""
+    progress = pyqtSignal(int)
+    done     = pyqtSignal(object)   # np.ndarray shape (n_components, n_frames)
+    error    = pyqtSignal(str)
+
+    def __init__(self, components, mean, reader, parent=None):
+        super().__init__(parent)
+        self._comps  = components.astype(np.float32)   # (n_comp, H*W)
+        self._mean   = mean.astype(np.float32)          # (H*W,)
+        self._reader = reader
+
+    def run(self):
+        try:
+            n_frames = len(self._reader)
+            n_comp   = self._comps.shape[0]
+            coeffs   = np.empty((n_comp, n_frames), dtype=np.float32)
+            report_every = max(1, n_frames // 100)
+            for i in range(n_frames):
+                frame      = self._reader[i].astype(np.float32).ravel()
+                coeffs[:, i] = self._comps @ (frame - self._mean)
+                if i % report_every == 0:
+                    self.progress.emit(int(100 * i / n_frames))
+            self.progress.emit(100)
+            self.done.emit(coeffs)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+class _PcaEigenvectorDialog(QDialog):
+    """Non-modal dialog: browse PCA eigenvector images and plot temporal weights."""
+
+    def __init__(self, components, mean, shape, explained,
+                 reader, timestamps, ts_unit,
+                 parent=None, stylesheet=''):
+        super().__init__(parent)
+        self.setWindowTitle('PCA Eigenvector Viewer')
+        self.setMinimumSize(720, 560)
+        if stylesheet:
+            self.setStyleSheet(stylesheet)
+
+        self._components    = components   # (n, H*W) float32
+        self._mean          = mean         # (H*W,)  float32
+        self._shape         = shape        # (H, W)
+        self._explained     = explained    # (n,) float32 or None
+        self._reader        = reader
+        self._timestamps    = timestamps   # (n_frames,) float64 or None
+        self._ts_unit       = ts_unit or ''
+        self._weight_worker = None
+        self._all_coeffs    = None   # (n_components, n_frames) once computed
+        self._current_idx   = 0
+        n = components.shape[0]
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(6)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # ── eigenvector image ─────────────────────────────────────────────────
+        self._img_view = pg.ImageView()
+        self._img_view.ui.roiBtn.hide()
+        self._img_view.ui.menuBtn.hide()
+        self._img_view.setMinimumHeight(280)
+        layout.addWidget(self._img_view)
+
+        # ── component slider ──────────────────────────────────────────────────
+        slider_row = QHBoxLayout()
+        slider_row.addWidget(QLabel('Component:'))
+        self._slider = QSlider(Qt.Orientation.Horizontal)
+        self._slider.setRange(0, n - 1)
+        self._slider.setValue(0)
+        slider_row.addWidget(self._slider, 1)
+        self._comp_lbl = QLabel()
+        self._comp_lbl.setMinimumWidth(130)
+        slider_row.addWidget(self._comp_lbl)
+        layout.addLayout(slider_row)
+
+        # ── buttons ───────────────────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        self._mean_btn = QPushButton('Show mean image')
+        self._mean_btn.setCheckable(True)
+        self._weight_btn  = QPushButton('Show temporal weights')
+        self._weight_prog = QProgressBar()
+        self._weight_prog.setVisible(False)
+        self._weight_prog.setMaximumWidth(120)
+        self._weight_prog.setTextVisible(False)
+        btn_row.addWidget(self._mean_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(self._weight_prog)
+        btn_row.addWidget(self._weight_btn)
+        layout.addLayout(btn_row)
+
+        # ── temporal weights plot (hidden until computed) ─────────────────────
+        self._plot = pg.PlotWidget()
+        self._plot.setLabel('left', 'Projection coefficient')
+        self._plot.setLabel('bottom', 'Frame')
+        self._plot.setMaximumHeight(170)
+        self._plot.setVisible(False)
+        layout.addWidget(self._plot)
+
+        # ── close ─────────────────────────────────────────────────────────────
+        close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_box.rejected.connect(self.reject)
+        layout.addWidget(close_box)
+
+        self._slider.valueChanged.connect(self._show_component)
+        self._mean_btn.toggled.connect(self._toggle_mean)
+        self._weight_btn.clicked.connect(self._start_weight_computation)
+
+        self._show_component(0)
+
+    # ── component display ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _pct_levels(img, lo=3, hi=97):
+        """Return (vmin, vmax) at the given percentiles for display."""
+        flat = img.ravel()
+        return (float(np.percentile(flat, lo)), float(np.percentile(flat, hi)))
+
+    def _show_component(self, idx):
+        self._current_idx = idx
+        n = self._components.shape[0]
+        img = self._components[idx].reshape(self._shape)
+        levels = self._pct_levels(img)
+        self._img_view.setImage(img, levels=levels, autoHistogramRange=False)
+
+        lbl = f'{idx + 1} / {n}'
+        if self._explained is not None and idx < len(self._explained):
+            lbl += f'  ({self._explained[idx] * 100:.1f}% var)'
+        self._comp_lbl.setText(lbl)
+
+        self._mean_btn.blockSignals(True)
+        self._mean_btn.setChecked(False)
+        self._mean_btn.blockSignals(False)
+
+        # If weights are already cached, update the plot immediately
+        if self._all_coeffs is not None:
+            self._update_weight_plot(idx)
+
+    def _toggle_mean(self, checked):
+        if checked:
+            img = self._mean.reshape(self._shape)
+            levels = self._pct_levels(img)
+            self._img_view.setImage(img, levels=levels, autoHistogramRange=False)
+        else:
+            self._show_component(self._current_idx)
+
+    # ── temporal weights ──────────────────────────────────────────────────────
+
+    def _start_weight_computation(self):
+        if self._reader is None or self._weight_worker is not None:
+            return
+        # If already cached, just update the plot for the current component
+        if self._all_coeffs is not None:
+            self._update_weight_plot(self._current_idx)
+            return
+        self._weight_btn.setEnabled(False)
+        self._weight_prog.setVisible(True)
+        self._weight_prog.setValue(0)
+        # Pass ALL components so we compute everything in one data pass
+        self._weight_worker = _PcaTemporalWeightWorker(
+            self._components, self._mean, self._reader, parent=self)
+        self._weight_worker.progress.connect(self._weight_prog.setValue)
+        self._weight_worker.done.connect(self._on_weights_done)
+        self._weight_worker.error.connect(self._on_weights_error)
+        self._weight_worker.start()
+
+    def _on_weights_done(self, all_coeffs):
+        # all_coeffs: (n_components, n_frames)
+        self._weight_worker = None
+        self._all_coeffs    = all_coeffs
+        self._weight_btn.setEnabled(True)
+        self._weight_btn.setText('Recompute temporal weights')
+        self._weight_prog.setVisible(False)
+        self._update_weight_plot(self._current_idx)
+
+    def _update_weight_plot(self, idx):
+        coeffs = self._all_coeffs[idx]
+        n      = self._components.shape[0]
+
+        if (self._timestamps is not None
+                and len(self._timestamps) == len(coeffs)):
+            x     = self._timestamps
+            x_lbl = f'Time ({self._ts_unit})' if self._ts_unit else 'Time'
+        else:
+            x     = np.arange(len(coeffs), dtype=np.float32)
+            x_lbl = 'Frame'
+
+        self._plot.setLabel('bottom', x_lbl)
+        self._plot.clear()
+        self._plot.plot(x, coeffs, pen=pg.mkPen('#4fc3f7', width=1))
+        title = f'Component {idx + 1} / {n}'
+        if self._explained is not None and idx < len(self._explained):
+            title += f'  ({self._explained[idx] * 100:.1f}% var)'
+        self._plot.setTitle(title)
+        self._plot.setVisible(True)
+
+    def _on_weights_error(self, msg):
+        self._weight_worker = None
+        self._weight_btn.setEnabled(True)
+        self._weight_prog.setVisible(False)
+        QMessageBox.warning(self, 'Temporal weights error', msg)
+
+
 # ── Trigger-aware slider ──────────────────────────────────────────────────────
 
 class TriggerSlider(QSlider):
@@ -2069,6 +2274,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.white_combo.currentIndexChanged.connect(self._on_white_combo_changed)
         self.pca_n_spin.valueChanged.connect(self._on_pca_n_changed)
         self._pca_settings_btn.clicked.connect(self._open_pca_settings)
+        self._pca_settings_btn.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu)
+        self._pca_settings_btn.customContextMenuRequested.connect(
+            self._show_pca_eigenvector_menu)
         self.store_fields_btn.clicked.connect(self._store_fields_ref)
 
         self.play_btn.clicked.connect(self._toggle_play)
@@ -3383,6 +3592,60 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._pca_master_mean       = None  # force master reload on blur-sigma change
             self._pca_master_components = None
             self._compute_or_load_pca()
+
+    def _show_pca_eigenvector_menu(self, pos):
+        has_data = self._pca_components is not None
+        if not has_data and self._pca_folder:
+            h = self._reader.h if self._reader else self.h_spin.value()
+            w = self._reader.w if self._reader else self.w_spin.value()
+            cache_path = self._pca_cache_path(self._pca_folder, h, w)
+            has_data = self._pca_cache_valid(cache_path, self._pca_folder)
+        menu = QMenu(self)
+        act  = menu.addAction('View eigenvectors…')
+        act.setEnabled(has_data)
+        if menu.exec(self._pca_settings_btn.mapToGlobal(pos)) is act:
+            self._open_pca_eigenvector_viewer()
+
+    def _open_pca_eigenvector_viewer(self):
+        components = self._pca_components
+        mean       = self._pca_mean
+        shape      = self._pca_shape
+        explained  = None
+
+        if components is None and self._pca_folder:
+            h = self._reader.h if self._reader else self.h_spin.value()
+            w = self._reader.w if self._reader else self.w_spin.value()
+            cache_path = self._pca_cache_path(self._pca_folder, h, w)
+            try:
+                data       = np.load(cache_path)
+                mean       = data['mean']
+                components = data['components']
+                explained  = data['explained'] if 'explained' in data else None
+                shape      = (h, w)
+            except Exception as exc:
+                QMessageBox.warning(self, 'PCA Viewer', f'Could not load PCA cache:\n{exc}')
+                return
+
+        if components is None or mean is None:
+            return
+
+        if explained is None and self._pca_folder:
+            h = self._reader.h if self._reader else self.h_spin.value()
+            w = self._reader.w if self._reader else self.w_spin.value()
+            try:
+                data      = np.load(self._pca_cache_path(self._pca_folder, h, w))
+                explained = data['explained'] if 'explained' in data else None
+            except Exception:
+                pass
+
+        dlg = _PcaEigenvectorDialog(
+            components, mean, shape, explained,
+            reader=self._reader,
+            timestamps=self._timestamps,
+            ts_unit=self._ts_unit,
+            parent=self,
+            stylesheet=self.styleSheet())
+        dlg.exec()
 
     def _on_pca_error(self, msg):
         self.corr_status_lbl.setText(f'PCA error: {msg}')
