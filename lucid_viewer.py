@@ -2960,9 +2960,12 @@ class LucidViewer(ViewerMixin, QMainWindow):
         else:
             lbl.setText('✓ White')
             lbl.setStyleSheet('color: #66cc66; font-size: 10px;')
-        tip = f'{basename}\nPath: {folder}'
-        if extra:
-            tip += f'\n\n{extra}' if is_error else f'\n{extra}'
+        if extra.startswith('master:'):
+            tip = extra
+        else:
+            tip = f'{basename}\nPath: {folder}'
+            if extra:
+                tip += f'\n\n{extra}'
         lbl.setToolTip(tip)
 
     # ── async field loaders ───────────────────────────────────────────────────
