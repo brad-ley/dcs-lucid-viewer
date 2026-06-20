@@ -738,7 +738,8 @@ class TiffExportWorker(QThread):
                  timestamps=None, ts_unit='s', trigger_t0=None, imagej=False,
                  pca_mean=None, pca_components=None, pca_n_components=5,
                  pca_mean_low=None, pca_components_low=None,
-                 pca_blur_enabled=False, pca_blur_sigma=400):
+                 pca_blur_enabled=False, pca_blur_sigma=400,
+                 pca_cell_gain=None):
         super().__init__()
         self._out_path            = out_path
         self._reader              = reader
@@ -764,6 +765,7 @@ class TiffExportWorker(QThread):
         self._pca_components_low  = pca_components_low
         self._pca_blur_enabled    = pca_blur_enabled
         self._pca_blur_sigma      = pca_blur_sigma
+        self._pca_cell_gain       = pca_cell_gain
         self._cancelled           = False
 
     def cancel(self):
@@ -781,12 +783,20 @@ class TiffExportWorker(QThread):
                 dark = dark * np.float32(10 ** ((data_gain - self._dark_field_gain) / 20.0))
             if dark is not None:
                 f = f - dark
+            if (data_gain is not None and self._pca_cell_gain is not None
+                    and data_gain != self._pca_cell_gain):
+                gain_scale = np.float32(10 ** ((data_gain - self._pca_cell_gain) / 20.0))
+                mu = mu * gain_scale
+            else:
+                gain_scale = None
             if (self._pca_blur_enabled
                     and self._pca_mean_low is not None
                     and self._pca_components_low is not None):
                 n_low  = min(n, self._pca_components_low.shape[0])
-                f_low  = _blur_and_bin(f, self._pca_blur_sigma, self._pca_mean_low.shape[0])
-                d_low  = f_low - self._pca_mean_low
+                mu_low = (self._pca_mean_low * gain_scale
+                          if gain_scale is not None else self._pca_mean_low)
+                f_low  = _blur_and_bin(f, self._pca_blur_sigma, mu_low.shape[0])
+                d_low  = f_low - mu_low
                 coeffs = self._pca_components_low[:n_low] @ d_low
                 bg     = (mu + comp[:n_low].T @ coeffs).reshape(frame.shape)
             else:
@@ -968,6 +978,7 @@ class GifExportWorker(QThread):
                  pca_mean=None, pca_components=None, pca_n_components=5,
                  pca_mean_low=None, pca_components_low=None,
                  pca_blur_enabled=False, pca_blur_sigma=400,
+                 pca_cell_gain=None,
                  gains=None, parent=None):
         super().__init__(parent)
         self._out_path            = out_path
@@ -989,6 +1000,7 @@ class GifExportWorker(QThread):
         self._pca_components_low  = pca_components_low
         self._pca_blur_enabled    = pca_blur_enabled
         self._pca_blur_sigma      = pca_blur_sigma
+        self._pca_cell_gain       = pca_cell_gain
         self._gains               = gains
         self._cancelled           = False
 
@@ -1006,12 +1018,20 @@ class GifExportWorker(QThread):
                 dark = dark * np.float32(10 ** ((data_gain - self._dark_field_gain) / 20.0))
             if dark is not None:
                 f = f - dark
+            if (data_gain is not None and self._pca_cell_gain is not None
+                    and data_gain != self._pca_cell_gain):
+                gain_scale = np.float32(10 ** ((data_gain - self._pca_cell_gain) / 20.0))
+                mu = mu * gain_scale
+            else:
+                gain_scale = None
             if (self._pca_blur_enabled
                     and self._pca_mean_low is not None
                     and self._pca_components_low is not None):
                 n_low  = min(n, self._pca_components_low.shape[0])
-                f_low  = _blur_and_bin(f, self._pca_blur_sigma, self._pca_mean_low.shape[0])
-                d_low  = f_low - self._pca_mean_low
+                mu_low = (self._pca_mean_low * gain_scale
+                          if gain_scale is not None else self._pca_mean_low)
+                f_low  = _blur_and_bin(f, self._pca_blur_sigma, mu_low.shape[0])
+                d_low  = f_low - mu_low
                 coeffs = self._pca_components_low[:n_low] @ d_low
                 bg     = (mu + comp[:n_low].T @ coeffs).reshape(frame.shape)
             else:
@@ -1976,6 +1996,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_master_components     = None   # (n, H*W) float32 master eigenvectors
         self._pca_master_mean_low       = None   # (H*W,) float32 master blurred mean
         self._pca_master_components_low = None   # (n, H*W) float32 master blurred eigenvectors
+        self._pca_cell_gain             = None   # mean gain (dB) of the cell white field
         self._cell_adapt_worker         = None   # CellAdaptWorker while adapting
         self._dark_field_worker         = None   # FieldLoadWorker for dark field
         self._white_flat_worker         = None   # FieldLoadWorker for flat white field
@@ -3511,6 +3532,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self.corr_status_lbl.setStyleSheet('color: #c88; font-size: 10px;')
             return
 
+        self._pca_cell_gain = self._read_average_gain(folder)
+
         h   = self._reader.h if self._reader else self.h_spin.value()
         w   = self._reader.w if self._reader else self.w_spin.value()
         fmt = self.fmt_combo.currentText()
@@ -3774,7 +3797,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self.corr_status_lbl.setText(f'Store error: {exc}')
             self.corr_status_lbl.setStyleSheet('color: #ff6b6b; font-size: 10px;')
 
-    def _apply_pca_correction_frame(self, frame, dark=None):
+    def _apply_pca_correction_frame(self, frame, dark=None, data_gain=None):
         """Subtract PCA-estimated white-field background; return float32 transmission."""
         mu   = self._pca_mean
         comp = self._pca_components
@@ -3782,12 +3805,20 @@ class LucidViewer(ViewerMixin, QMainWindow):
         f = frame.astype(np.float32)
         if dark is not None:
             f = f - dark
+        if (data_gain is not None and self._pca_cell_gain is not None
+                and data_gain != self._pca_cell_gain):
+            gain_scale = np.float32(10 ** ((data_gain - self._pca_cell_gain) / 20.0))
+            mu = mu * gain_scale
+        else:
+            gain_scale = None
         if (self._pca_blur_enabled
                 and self._pca_mean_low is not None
                 and self._pca_components_low is not None):
             n_low  = min(n, self._pca_components_low.shape[0])
-            f_low  = _blur_and_bin(f, self._pca_blur_sigma, self._pca_mean_low.shape[0])
-            d_low  = f_low - self._pca_mean_low
+            mu_low = (self._pca_mean_low * gain_scale
+                      if gain_scale is not None else self._pca_mean_low)
+            f_low  = _blur_and_bin(f, self._pca_blur_sigma, mu_low.shape[0])
+            d_low  = f_low - mu_low
             coeffs = self._pca_components_low[:n_low] @ d_low
             bg     = (mu + comp[:n_low].T @ coeffs).reshape(frame.shape)
         else:
@@ -3990,7 +4021,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                         and data_gain != self._dark_field_gain):
                     dark = dark * np.float32(
                         10 ** ((data_gain - self._dark_field_gain) / 20.0))
-            return self._apply_pca_correction_frame(frame, dark=dark)
+            return self._apply_pca_correction_frame(frame, dark=dark, data_gain=data_gain)
 
         if self._dark_field is None and self._white_field is None:
             return frame
@@ -4204,6 +4235,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             pca_components_low=pca_comp_low,
             pca_blur_enabled=self._pca_blur_enabled,
             pca_blur_sigma=self._pca_blur_sigma,
+            pca_cell_gain=self._pca_cell_gain,
         )
         self._export_worker = worker
 
@@ -4293,6 +4325,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             pca_components_low=pca_comp_low,
             pca_blur_enabled=self._pca_blur_enabled,
             pca_blur_sigma=self._pca_blur_sigma,
+            pca_cell_gain=self._pca_cell_gain,
             gains=self._gains,
             parent=self,
         )
