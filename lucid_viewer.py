@@ -1569,13 +1569,19 @@ class _PcaSettingsDialog(QDialog):
     """PCA-specific settings: Gaussian-blur dual-resolution projection and universal mode."""
 
     def __init__(self, blur_enabled, blur_sigma,
-                 universal_enabled=False, master_folder='',
+                 universal_enabled=False, master_folder='', master_folder_mode='',
+                 find_fn=None, start_dir='',
                  parent=None, stylesheet=''):
         super().__init__(parent)
         self.setWindowTitle('PCA Settings')
-        self.setMinimumWidth(360)
+        self.setMinimumWidth(380)
         if stylesheet:
             self.setStyleSheet(stylesheet)
+        self._master_folder      = master_folder
+        self._master_folder_mode = master_folder_mode
+        self._find_fn            = find_fn
+        self._start_dir          = start_dir
+
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -1619,18 +1625,33 @@ class _PcaSettingsDialog(QDialog):
 
         univ_note = QLabel(
             'Uses a pre-computed master PCA from a cell-free white field.\n'
-            'Eigenvectors are adapted per-experiment via cell-mean scaling + QR\n'
-            '— no SVD recomputation needed for each new cell.\n'
-            'Set master folder via:  Config → Set White Field → Master PCA…')
+            'Eigenvectors are adapted per-experiment via cell-mean scaling + re-orthogonalization\n'
+            '— no SVD recomputation needed for each new cell.')
         univ_note.setWordWrap(True)
         univ_note.setStyleSheet('color: #888; font-size: 10px;')
         layout.addWidget(univ_note)
 
-        master_short = os.path.basename(master_folder) if master_folder else '(not set)'
-        self._master_lbl = QLabel(f'Master folder: {master_short}')
-        self._master_lbl.setToolTip(master_folder or 'No master folder set — use Config → Set White Field → Master PCA')
+        self._master_lbl = QLabel()
         self._master_lbl.setStyleSheet('color: #aaa; font-size: 10px;')
         layout.addWidget(self._master_lbl)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        self._choose_btn = QPushButton('Choose Folder…')
+        self._choose_btn.setFixedHeight(24)
+        self._choose_btn.clicked.connect(self._choose_folder)
+        self._find_btn = QPushButton('Find')
+        self._find_btn.setFixedHeight(24)
+        self._find_btn.setCheckable(True)
+        self._find_btn.clicked.connect(self._do_find)
+        btn_row.addWidget(self._choose_btn)
+        btn_row.addWidget(self._find_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self._universal_chk.toggled.connect(self._on_universal_toggled)
+        self._on_universal_toggled(universal_enabled)
+        self._refresh_master_label()
 
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
                                 QDialogButtonBox.StandardButton.Cancel)
@@ -1638,6 +1659,48 @@ class _PcaSettingsDialog(QDialog):
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
         self.adjustSize()
+
+    def _on_universal_toggled(self, enabled):
+        self._choose_btn.setEnabled(enabled)
+        self._find_btn.setEnabled(enabled)
+
+    def _refresh_master_label(self):
+        folder = self._master_folder
+        mode   = self._master_folder_mode
+        if folder:
+            name   = os.path.basename(folder)
+            suffix = ' (manually chosen)' if mode == 'manual' else ' (auto-found)' if mode == 'auto' else ''
+            self._master_lbl.setText(f'Master: {name}{suffix}')
+            self._master_lbl.setToolTip(folder)
+        else:
+            self._master_lbl.setText('Master: (not set)')
+            self._master_lbl.setToolTip('No master folder set')
+        self._find_btn.setChecked(self._master_folder_mode == 'auto')
+        choose_text = '✓ Choose Folder…' if self._master_folder_mode == 'manual' else 'Choose Folder…'
+        self._choose_btn.setText(choose_text)
+
+    def _choose_folder(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, 'Select master white field folder (clean, no cell)', self._start_dir)
+        if not folder:
+            return
+        self._master_folder      = folder
+        self._master_folder_mode = 'manual'
+        self._refresh_master_label()
+
+    def _do_find(self):
+        if self._find_fn is None:
+            self._find_btn.setChecked(False)
+            return
+        folder = self._find_fn()
+        if not folder:
+            self._find_btn.setChecked(False)
+            QMessageBox.warning(self, 'Master PCA',
+                                'No *_master* folder found near the current file.')
+            return
+        self._master_folder      = folder
+        self._master_folder_mode = 'auto'
+        self._refresh_master_label()
 
     @property
     def blur_enabled(self):
@@ -1650,6 +1713,14 @@ class _PcaSettingsDialog(QDialog):
     @property
     def universal_enabled(self):
         return self._universal_chk.isChecked()
+
+    @property
+    def master_folder(self):
+        return self._master_folder
+
+    @property
+    def master_folder_mode(self):
+        return self._master_folder_mode
 
 
 # ── PCA eigenvector viewer ────────────────────────────────────────────────────
@@ -2007,6 +2078,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_blur_sigma        = 400   # Gaussian blur sigma for low-res pass (px)
         self._pca_universal             = False  # use master basis + cell-mean adaptation
         self._pca_master_folder         = ''     # path to master (no-cell) white field folder
+        self._pca_master_folder_mode    = ''     # 'manual' | 'auto' | ''
         self._pca_master_mean           = None   # (H*W,) float32 master no-cell mean
         self._pca_master_components     = None   # (n, H*W) float32 master eigenvectors
         self._pca_master_mean_low       = None   # (H*W,) float32 master blurred mean
@@ -2023,7 +2095,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         self.setWindowTitle('LucidLabs ATX245 Viewer')
         self.resize(1300, 860)
-        _ico = os.path.join(os.path.dirname(__file__), 'assets', 'projector.ico')
+        _ico = os.path.join(os.path.dirname(__file__), 'assets', 'tv_png.ico')
         if os.path.isfile(_ico):
             self.setWindowIcon(QIcon(_ico))
         self._build_ui()
@@ -2058,9 +2130,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
         pca_act = QAction('&PCA…', self)
         pca_act.triggered.connect(self._select_white_pca_folder)
         white_menu.addAction(pca_act)
-        master_act = QAction('&Master PCA…', self)
-        master_act.triggered.connect(self._select_master_folder)
-        white_menu.addAction(master_act)
+        master_menu = white_menu.addMenu('&Master PCA')
+        self._master_choose_act = QAction('Choose Folder…', self)
+        self._master_choose_act.triggered.connect(self._select_master_folder)
+        master_menu.addAction(self._master_choose_act)
+        self._master_find_act = QAction('Find', self)
+        self._master_find_act.setCheckable(True)
+        self._master_find_act.triggered.connect(self._find_master_folder_action)
+        master_menu.addAction(self._master_find_act)
         dark_cap_act = QAction('Set &Dark Field…', self)
         dark_cap_act.triggered.connect(self._select_dark_folder)
         config_menu.addAction(dark_cap_act)
@@ -3449,8 +3526,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if not master or not os.path.isdir(master):
             master = self._find_master_folder()
             if master:
-                self._pca_master_folder = master
+                self._pca_master_folder      = master
+                self._pca_master_folder_mode = 'auto'
                 self._settings.setValue('pca/master_folder', master)
+                self._update_master_menu_actions()
                 self.corr_status_lbl.setText(
                     f'Universal PCA: auto-detected master → {os.path.basename(master)}')
                 self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
@@ -3612,26 +3691,42 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._pca_blur_enabled, self._pca_blur_sigma,
             universal_enabled=self._pca_universal,
             master_folder=self._pca_master_folder,
+            master_folder_mode=self._pca_master_folder_mode,
+            find_fn=self._find_master_folder,
+            start_dir=os.path.dirname(self._path) if self._path else '',
             parent=self, stylesheet=self.styleSheet())
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         new_enabled   = dlg.blur_enabled
         new_sigma     = dlg.blur_sigma
         new_universal = dlg.universal_enabled
+        new_master    = dlg.master_folder
+        new_master_mode = dlg.master_folder_mode
         blur_changed      = (new_enabled != self._pca_blur_enabled or
                              (new_enabled and new_sigma != self._pca_blur_sigma))
         universal_changed = new_universal != self._pca_universal
+        master_changed    = new_master != self._pca_master_folder
         self._pca_blur_enabled = new_enabled
         self._pca_blur_sigma   = new_sigma
         self._pca_universal    = new_universal
         self._settings.setValue('pca/blur_enabled', self._pca_blur_enabled)
         self._settings.setValue('pca/blur_sigma',   self._pca_blur_sigma)
         self._settings.setValue('pca/universal',    self._pca_universal)
-        if (blur_changed or universal_changed) and self._white_mode == 'pca':
+        if master_changed and new_master:
+            self._pca_master_folder      = new_master
+            self._pca_master_folder_mode = new_master_mode
+            self._pca_master_mean            = None
+            self._pca_master_components      = None
+            self._pca_master_mean_low        = None
+            self._pca_master_components_low  = None
+            self._settings.setValue('pca/master_folder', new_master)
+            self._update_master_menu_actions()
+        if (blur_changed or universal_changed or master_changed) and self._white_mode == 'pca':
             self._pca_mean_low          = None
             self._pca_components_low    = None
-            self._pca_master_mean       = None  # force master reload on blur-sigma change
-            self._pca_master_components = None
+            if not master_changed:
+                self._pca_master_mean       = None
+                self._pca_master_components = None
             self._compute_or_load_pca()
 
     def _show_pca_eigenvector_menu(self, pos):
@@ -3739,8 +3834,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if white_mode == 'pca' and refs.get('pca_universal'):
             master = refs.get('white_pca_master_folder', '')
             if master and os.path.isdir(master):
-                self._pca_universal     = True
-                self._pca_master_folder = master
+                self._pca_universal          = True
+                self._pca_master_folder      = master
+                self._pca_master_folder_mode = 'manual'
+                self._update_master_menu_actions()
 
     def _get_or_create_sidecar_path(self):
         """Return best sidecar path for writing.
@@ -3905,20 +4002,52 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if self.white_chk.isChecked():
             self._reload_fields()
 
+    def _update_master_menu_actions(self):
+        """Sync Master PCA submenu text, checked state, and tooltips to current folder/mode."""
+        folder = self._pca_master_folder
+        tip = folder if folder else 'No master folder set'
+        mode = self._pca_master_folder_mode
+        self._master_choose_act.setText('✓ Choose Folder…' if mode == 'manual' else 'Choose Folder…')
+        self._master_choose_act.setToolTip(tip)
+        self._master_find_act.setChecked(mode == 'auto')
+        self._master_find_act.setToolTip(tip)
+
+    def _find_master_folder_action(self):
+        """Config → Set White Field → Master PCA → Find"""
+        folder = self._find_master_folder()
+        if not folder:
+            self._master_find_act.setChecked(False)
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, 'Master PCA',
+                                'No *_master* folder found near the current file.')
+            return
+        self._pca_master_folder      = folder
+        self._pca_master_folder_mode = 'auto'
+        self._pca_master_mean            = None
+        self._pca_master_components      = None
+        self._pca_master_mean_low        = None
+        self._pca_master_components_low  = None
+        self._settings.setValue('pca/master_folder', folder)
+        self._update_master_menu_actions()
+        if self._pca_universal and self._white_mode == 'pca':
+            self._compute_or_load_pca()
+
     def _select_master_folder(self):
-        """Config → Set White Field → Master PCA…"""
+        """Config → Set White Field → Master PCA → Choose Folder…"""
         start = os.path.dirname(self._path) if self._path else ''
         folder = QFileDialog.getExistingDirectory(
             self, 'Select master white field folder (clean, no cell)', start)
         if not folder:
             return
-        self._pca_master_folder = folder
+        self._pca_master_folder      = folder
+        self._pca_master_folder_mode = 'manual'
         # Clear cached master arrays so they're reloaded from the new folder
         self._pca_master_mean            = None
         self._pca_master_components      = None
         self._pca_master_mean_low        = None
         self._pca_master_components_low  = None
         self._settings.setValue('pca/master_folder', folder)
+        self._update_master_menu_actions()
         if self._pca_universal and self._white_mode == 'pca':
             self._compute_or_load_pca()
 
@@ -4492,6 +4621,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_blur_sigma    = s.value('pca/blur_sigma',    400,   type=int)
         self._pca_universal     = s.value('pca/universal',     False, type=bool)
         self._pca_master_folder = s.value('pca/master_folder', '',    type=str)
+        if self._pca_master_folder:
+            self._pca_master_folder_mode = 'manual'
+            self._update_master_menu_actions()
         pca_visible = chk_checked and (combo_idx == 1)
         self._pca_n_lbl.setVisible(pca_visible)
         self.pca_n_spin.setVisible(pca_visible)
@@ -4578,7 +4710,7 @@ if __name__ == '__main__':
         pass
 
     app = QApplication(sys.argv)
-    _ico = os.path.join(os.path.dirname(__file__), 'assets', 'projector.ico')
+    _ico = os.path.join(os.path.dirname(__file__), 'assets', 'tv_png.ico')
     if os.path.isfile(_ico):
         app.setWindowIcon(QIcon(_ico))
     win = LucidViewer()
