@@ -1,0 +1,5 @@
+To get changes only in github-branch:
+git checkout master
+git checkout github-branch -- .
+
+This only pulls changes from files in that branch. Then just commit and push.
