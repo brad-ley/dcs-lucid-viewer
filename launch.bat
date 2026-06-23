@@ -58,13 +58,7 @@ if not exist "%PYTHON%" (
     call "%CONDA%" env update -n %ENV_NAME% -f "%ENV_YML%" --prune
 )
 
-:: ── Add conda env DLL directories to PATH ───────────────────────────────────────
-:: Conda-installed packages (scipy, numpy) store their native DLLs in Library\bin.
-:: Without conda activation these are missing from PATH, causing DLL load failures
-:: the first time a file is opened and scipy is imported.
-set "ENV_ROOT=%CONDA_ROOT%\envs\%ENV_NAME%"
-set "PATH=%ENV_ROOT%\Library\bin;%ENV_ROOT%\Library\mingw-w64\bin;%ENV_ROOT%\Library\usr\bin;%ENV_ROOT%\Scripts;%PATH%"
-
-:: ── Launch viewer ──────────────────────────────────────────────────────────────
+:: ── Activate environment and launch viewer ──────────────────────────────────────
 echo Starting LucidVision viewer...
-"%PYTHON%" "%SCRIPT%" %*
+call "%CONDA%" activate %ENV_NAME%
+python "%SCRIPT%" %*
