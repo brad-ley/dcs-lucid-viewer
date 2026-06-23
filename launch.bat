@@ -17,7 +17,7 @@ if errorlevel 1 (
     goto :skip_git
 )
 echo Pulling latest code from GitHub...
-git -C "%REPO%" pull origin main
+git -C "%REPO%" pull origin github-branch
 if errorlevel 1 (
     echo WARNING: git pull failed. Running with local copy.
 )
@@ -58,6 +58,7 @@ if not exist "%PYTHON%" (
     call "%CONDA%" env update -n %ENV_NAME% -f "%ENV_YML%" --prune
 )
 
-:: ── Launch viewer ──────────────────────────────────────────────────────────────
+:: ── Activate environment and launch viewer ──────────────────────────────────────
 echo Starting LucidVision viewer...
-"%PYTHON%" "%SCRIPT%" %*
+call "%CONDA%" activate %ENV_NAME%
+python "%SCRIPT%" %*
