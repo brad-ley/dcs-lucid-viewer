@@ -1,0 +1,15 @@
+name: lucid-viewer
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - numpy
+  - scipy
+  - pip
+  - pip:
+    - PyQt6
+    - pyqtgraph
+    - tifffile
+    - opencv-python
+    - pillow

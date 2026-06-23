@@ -6,6 +6,49 @@ PCA-based background removal), and exports corrected stacks as TIFF or GIF.
 
 ---
 
+## Getting Started
+
+### 1. Install prerequisites
+
+You only need to do this once.
+
+**Git** — for downloading and updating the software:
+- Download from https://git-scm.com/download/win
+- During install, accept the default options. Make sure "Git from the command line" is selected so `git` is on your PATH.
+
+**Miniconda** — for the Python environment:
+- Download the Windows installer from https://docs.conda.io/en/latest/miniconda.html
+- During install, select **"Just Me"** and accept the default install path (`%USERPROFILE%\AppData\Local\miniconda3`).
+- You do **not** need to add conda to PATH or make it the default Python.
+
+### 2. Clone the repository
+
+Open **Git Bash** or **Command Prompt** and run:
+
+```
+git clone https://github.com/brad-ley/dcs-lucid-viewer.git
+cd dcs-lucid-viewer
+```
+
+Or use GitHub Desktop / any Git GUI to clone `https://github.com/brad-ley/dcs-lucid-viewer.git`.
+
+### 3. Run the viewer
+
+Double-click **`launch.bat`** in the cloned folder.
+
+On first run it will:
+1. Pull the latest code from GitHub.
+2. Create a `lucid-viewer` conda environment with all dependencies (takes a few minutes).
+3. Open the viewer.
+
+On every subsequent run it pulls updates and refreshes the environment automatically, then opens the viewer.
+
+> **Offline use:** if you have no internet connection, `launch.bat` will warn that git pull failed and continue using the local copy.
+
+---
+
+---
+
 ## Contents
 
 1. [Supported file formats](#file-formats)
