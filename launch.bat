@@ -17,7 +17,7 @@ if errorlevel 1 (
     goto :skip_git
 )
 echo Pulling latest code from GitHub...
-git -C "%REPO%" pull origin main
+git -C "%REPO%" pull origin github-branch
 if errorlevel 1 (
     echo WARNING: git pull failed. Running with local copy.
 )
