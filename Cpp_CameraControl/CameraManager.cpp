@@ -593,8 +593,8 @@ bool CameraManager::applyParameters(const CameraParameters& params, std::string&
             GenApi::CFloatPtr pExpTime = pNodeMap->GetNode("ExposureTime");
             if (pExpTime && GenApi::IsWritable(pExpTime))
             {
-                double clamped = std::max<int64_t>(pExpTime->GetMin(),
-                                 std::min<int64_t>(pExpTime->GetMax(), params.exposureTime));
+                double clamped = std::max<double>(pExpTime->GetMin(),
+                                 std::min<double>(pExpTime->GetMax(), params.exposureTime));
                 pExpTime->SetValue(clamped);
             }
         }
@@ -616,8 +616,8 @@ bool CameraManager::applyParameters(const CameraParameters& params, std::string&
             GenApi::CFloatPtr pGain = pNodeMap->GetNode("Gain");
             if (pGain && GenApi::IsWritable(pGain))
             {
-                double clamped = std::max<int64_t>(pGain->GetMin(),
-                                 std::min<int64_t>(pGain->GetMax(), params.gain));
+                double clamped = std::max<double>(pGain->GetMin(),
+                                 std::min<double>(pGain->GetMax(), params.gain));
                 pGain->SetValue(clamped);
             }
         }
@@ -636,8 +636,8 @@ bool CameraManager::applyParameters(const CameraParameters& params, std::string&
             GenApi::CFloatPtr pFRate = pNodeMap->GetNode("AcquisitionFrameRate");
             if (pFRate && GenApi::IsWritable(pFRate))
             {
-                double clamped = std::max<int64_t>(pFRate->GetMin(),
-                                 std::min<int64_t>(pFRate->GetMax(), params.frameRate));
+                double clamped = std::max<double>(pFRate->GetMin(),
+                                 std::min<double>(pFRate->GetMax(), params.frameRate));
                 pFRate->SetValue(clamped);
             }
         }
@@ -1001,7 +1001,7 @@ bool CameraManager::setNodeDoubleValue(const std::string& nodeName,
 
         // Clamp to the camera's allowed range before writing.
         // Writing an out-of-range value throws a GenICam exception.
-        double clamped = std::max<int64_t>(pFloat->GetMin(), std::min<int64_t>(pFloat->GetMax(), value));
+        double clamped = std::max<double>(pFloat->GetMin(), std::min<double>(pFloat->GetMax(), value));
         pFloat->SetValue(clamped);
         return true;
     }
