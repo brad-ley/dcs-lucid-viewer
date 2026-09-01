@@ -2175,7 +2175,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._play_start_ts_idx = 0      # frame index at play start
         self._auto_levels_done  = False  # True after first frame of each file is shown
 
-        self.setWindowTitle('LucidLabs ATX245 Viewer')
+        self.setWindowTitle('Single-frame PCI Viewer')
         self.resize(1300, 860)
         _ico = os.path.join(os.path.dirname(__file__), 'assets', 'tv_png.ico')
         if os.path.isfile(_ico):
