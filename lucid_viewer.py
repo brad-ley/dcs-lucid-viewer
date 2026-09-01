@@ -52,11 +52,50 @@ PIXEL_FORMATS = [
 ATX245_W = 5328
 ATX245_H = 4608
 
+# OrcaFireControl (the Hamamatsu ORCA-Fire app, a sibling project under
+# HamamatsuOrcaFire/) writes its own sidecar JSON with lowercase pixel_format
+# names ('mono8', 'mono16', 'mono12p') rather than this viewer's PIXEL_FORMATS
+# spelling ('Mono8', 'Mono16', 'Mono12p'). frame_byte_count()/unpack_frame()
+# key their dicts on the exact PIXEL_FORMATS spelling, so anything read from a
+# sidecar or filename needs to go through this first.
+def _canonicalize_pixel_format(fmt):
+    if not fmt:
+        return fmt
+    for canonical in PIXEL_FORMATS:
+        if canonical.lower() == str(fmt).lower():
+            return canonical
+    return fmt
+
+
+def _sqrt_inverse_lut_from_sidecar(sidecar):
+    """
+    OrcaFireControl's "sqrt encoded" 12-bit Store-as mode packs 16-bit sensor
+    counts through a square-root lookup table before writing, so the stored
+    codes are NOT linear in counts -- see FrameRecorder.cpp's writeSidecar()
+    in the OrcaFireControl repo. When a sidecar carries pack_transform ==
+    'sqrt_lut', it also carries the exact inverse table (4096 entries, one
+    per possible 12-bit code) needed to undo that, base64-encoded.
+
+    Returns a (4096,) uint16 numpy array -- codes[i] is the reconstructed
+    16-bit count for stored code i, ready for RawReader to apply with a
+    single fancy-index lookup -- or None if this recording isn't sqrt-encoded
+    (which is every recording from any other source, and every OrcaFireControl
+    recording using one of its other three Store-as modes).
+    """
+    if not sidecar or sidecar.get('pack_transform') != 'sqrt_lut':
+        return None
+    b64 = sidecar.get('sqrt_inverse_lut_base64')
+    if not b64:
+        return None
+    import base64
+    return np.frombuffer(base64.b64decode(b64), dtype='<u2')
+
 
 # ── Pixel-format unpacking ────────────────────────────────────────────────────
 
 def frame_byte_count(fmt: str, w: int, h: int) -> float:
     """Return bytes per frame (may be fractional for packed formats)."""
+    fmt = _canonicalize_pixel_format(fmt)
     n = w * h
     return {
         'Mono8':        n,
@@ -74,6 +113,7 @@ def unpack_frame(raw_bytes: bytes, fmt: str, w: int, h: int) -> np.ndarray:
     """
     Unpack a single frame's raw bytes into a uint16 [H, W] array.
     """
+    fmt = _canonicalize_pixel_format(fmt)
     n = w * h
     buf = np.frombuffer(raw_bytes, dtype=np.uint8)
 
@@ -139,12 +179,16 @@ def unpack_frame(raw_bytes: bytes, fmt: str, w: int, h: int) -> np.ndarray:
 class RawReader:
     """Lazy reader for a single .raw file containing concatenated frames."""
 
-    def __init__(self, path: str, fmt: str, w: int, h: int):
+    def __init__(self, path: str, fmt: str, w: int, h: int, inverse_lut=None):
         self.path  = path
-        self.fmt   = fmt
+        self.fmt   = _canonicalize_pixel_format(fmt)
         self.w     = w
         self.h     = h
         self._mmap = None
+        # See _sqrt_inverse_lut_from_sidecar(): non-None only for an
+        # OrcaFireControl recording using its sqrt-encoded 12-bit Store-as
+        # mode, where the stored codes are not linear in sensor counts.
+        self.inverse_lut = inverse_lut
         bpf = frame_byte_count(fmt, w, h)
         if bpf != int(bpf):
             raise ValueError(
@@ -167,7 +211,12 @@ class RawReader:
     def __getitem__(self, idx: int) -> np.ndarray:
         start = idx * self.bpf
         raw   = bytes(self._data[start : start + self.bpf])
-        return unpack_frame(raw, self.fmt, self.w, self.h)
+        frame = unpack_frame(raw, self.fmt, self.w, self.h)
+        if self.inverse_lut is not None:
+            # Codes are 0..4095 by construction (12-bit packed), so this is a
+            # single vectorized fancy-index lookup -- no per-pixel Python loop.
+            frame = self.inverse_lut[frame]
+        return frame
 
     @property
     def shape(self):
@@ -315,18 +364,22 @@ def _load_sidecar(path: str):
 
 def _load_timestamps(path: str):
     """
-    Look for frame_data.csv (preferred) or timestamps.csv in the same directory
-    as *path*.  Returns (timestamps, unit, gains, exposures, line_statuses) where
-    timestamps is a 1-D float64 array of relative times in the best-fit unit,
-    unit is a string ('µs', 'ms', 's', 'min'), gains and exposures are 1-D
-    float64 arrays or None, and line_statuses is a 1-D int64 array or None.
-    Returns (None, '', None, None, None) on failure.
+    Look for frame_data.csv (preferred), timestamps.csv, or an OrcaFireControl
+    "<stem>_index.csv" (e.g. recording.raw -> recording_index.csv) in the same
+    directory as *path*. Returns (timestamps, unit, gains, exposures,
+    line_statuses) where timestamps is a 1-D float64 array of relative times
+    in the best-fit unit, unit is a string ('µs', 'ms', 's', 'min'), gains and
+    exposures are 1-D float64 arrays or None, and line_statuses is a 1-D
+    int64 array or None. Returns (None, '', None, None, None) on failure.
     """
     dir_ = os.path.dirname(path)
     frame_data_path = os.path.join(dir_, 'frame_data.csv')
+    index_path = os.path.splitext(path)[0] + '_index.csv'
     csv_path = os.path.join(dir_, 'timestamps.csv')
     if os.path.isfile(frame_data_path):
         csv_path = frame_data_path
+    elif os.path.isfile(index_path):
+        csv_path = index_path
     elif not os.path.isfile(csv_path):
         return None, '', None, None, None
     try:
@@ -336,7 +389,7 @@ def _load_timestamps(path: str):
         with open(csv_path, newline='', encoding='utf-8-sig') as fh:
             reader = csv.reader(fh)
             rows = [row for row in reader if any(cell.strip() for cell in row)]
-            
+
         if not rows:
             return None, '', None, None, None
 
@@ -350,7 +403,33 @@ def _load_timestamps(path: str):
         except ValueError:
             has_header = True
             header_row = [cell.strip().lower() for cell in rows[0]]
-            
+
+        # OrcaFireControl's index CSV (file_index,framestamp,cam_sec,cam_usec,
+        # host_ns) is a known, fixed schema -- handle it directly rather than
+        # through the generic column-sniffing heuristics below. Those heuristics
+        # pick a time column by testing whether the header CONTAINS any of a
+        # list of substrings including the bare letter 't', and 'framestamp'
+        # (the camera's frame counter, not a timestamp) matches that before
+        # 'host_ns' is ever considered -- which would silently plot the frame
+        # counter as if it were a time axis.
+        if has_header and 'host_ns' in header_row and 'framestamp' in header_row:
+            ns_idx = header_row.index('host_ns')
+            ns_vals = []
+            for row in rows[1:]:
+                if ns_idx < len(row) and row[ns_idx].strip():
+                    try:
+                        ns_vals.append(float(row[ns_idx]))
+                    except ValueError:
+                        pass
+            if len(ns_vals) >= 2:
+                ts = (np.array(ns_vals, dtype=np.float64) - ns_vals[0]) * 1e-9  # -> seconds
+                span = ts[-1] - ts[0]
+                if span < 0.5:
+                    return ts * 1e3, 'ms', None, None, None
+                if span < 120:
+                    return ts, 's', None, None, None
+                return ts / 60, 'min', None, None, None
+
         # Group numeric values by column index
         num_cols = max(len(row) for row in rows)
         col_values = {i: [] for i in range(num_cols)}
@@ -1159,7 +1238,8 @@ class PcaComputeWorker(QThread):
                            or self._fmt)
                     w = int(sidecar.get('width',  self._w))
                     h = int(sidecar.get('height', self._h))
-                    r = RawReader(fpath, fmt, w, h)
+                    r = RawReader(fpath, fmt, w, h,
+                                  inverse_lut=_sqrt_inverse_lut_from_sidecar(sidecar))
                     n_file = len(r)
                     budget = max_frames - len(frames)
                     if n_file <= budget:
@@ -1327,7 +1407,8 @@ class FieldLoadWorker(QThread):
                        or sidecar.get('PixelFormat') or self._fmt)
                 w = int(sidecar.get('width',  self._w))
                 h = int(sidecar.get('height', self._h))
-                r = RawReader(fpath, fmt, w, h)
+                r = RawReader(fpath, fmt, w, h,
+                              inverse_lut=_sqrt_inverse_lut_from_sidecar(sidecar))
                 frame = r[0].astype(np.float32)
                 r.close()
                 return frame
@@ -2042,6 +2123,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._path              = None
         self._sidecar_fps       = None
         self._sidecar_status    = ''
+        self._sidecar           = {}   # Full parsed sidecar dict -- see _apply_hints()
         self._sidecar_acq_time  = ''
         self._sidecar_notes     = ''
         self._timestamps        = None   # 1-D float64, relative, display units
@@ -2420,6 +2502,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         """Apply metadata from .json sidecar first, fall back to filename heuristics."""
         self._stored_field_refs = {}
         sidecar, self._sidecar_status = _load_sidecar(path)
+        self._sidecar = sidecar
 
         w   = sidecar.get('width')
         h   = sidecar.get('height')
@@ -2467,7 +2550,15 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         try:
             if ext == '.raw':
-                reader = RawReader(path, fmt, w, h)
+                # Only apply the sidecar's inverse LUT if the format in effect
+                # still matches what the sidecar describes -- if the user has
+                # hand-overridden the format combo, its assumptions (including
+                # the LUT) no longer apply.
+                sidecar_fmt = _canonicalize_pixel_format(
+                    self._sidecar.get('pixel_format') or self._sidecar.get('pixelformat'))
+                lut = (_sqrt_inverse_lut_from_sidecar(self._sidecar)
+                       if _canonicalize_pixel_format(fmt) == sidecar_fmt else None)
+                reader = RawReader(path, fmt, w, h, inverse_lut=lut)
             elif ext in ('.tiff', '.tif'):
                 reader = TiffReader(path)
                 w, h = reader.w, reader.h
@@ -2935,7 +3026,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     # per-image (field captures may use a different format than
                     # the experiment).
                     sidecar, sidecar_status = _load_sidecar(fpath)
-                    f_fmt = _fmt_from_sc(sidecar)
+                    f_fmt = _canonicalize_pixel_format(_fmt_from_sc(sidecar))
                     if f_fmt and f_fmt in PIXEL_FORMATS:
                         fmt = f_fmt
                     else:
@@ -2951,7 +3042,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     w = int(sidecar.get('width',  default_w))
                     h = int(sidecar.get('height', default_h))
                     print(f'[field]   {fname}: fmt={fmt!r}, {w}x{h}  [{sidecar_status}]')
-                    r = RawReader(fpath, fmt, w, h)
+                    r = RawReader(fpath, fmt, w, h,
+                                  inverse_lut=_sqrt_inverse_lut_from_sidecar(sidecar))
                     n_file = len(r)
                     budget = MAX_FIELD_FRAMES - len(frames)
                     if n_file <= budget:
@@ -3326,7 +3418,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
                            or sidecar.get('pixelformat') or default_fmt)
                     w = int(sidecar.get('width',  default_w))
                     h = int(sidecar.get('height', default_h))
-                    r = RawReader(fpath, fmt, w, h)
+                    r = RawReader(fpath, fmt, w, h,
+                                  inverse_lut=_sqrt_inverse_lut_from_sidecar(sidecar))
                     for i in range(len(r)):
                         frames.append(r[i].astype(np.float32))
                     r.close()
