@@ -414,21 +414,54 @@ def _load_timestamps(path: str):
         # counter as if it were a time axis.
         if has_header and 'host_ns' in header_row and 'framestamp' in header_row:
             ns_idx = header_row.index('host_ns')
+
+            # trigger_sent is OrcaFireControl's own trigger marker: a plain
+            # 0/1 per frame, NOT a Lucid/Arena-style line_status_all bitmask
+            # -- it is a SOFTWARE ESTIMATE (camera-clock elapsed time since
+            # this run's first frame compared against the configured OUTPUT
+            # TRIGGER DELAY), not a hardware confirmation that a pulse
+            # actually reached the wire. See checkOutputTriggerAgainstFrame()
+            # and the trigger label's own tooltip in the OrcaFireControl repo
+            # for the exact caveat.
+            #
+            # Fed into line_statuses as 0xFFFF (all 16 bits set) rather than
+            # bit 0 specifically: TriggerSlider/_trigger_frames test a single
+            # user-configurable bit position (Config > Trigger settings...,
+            # default 2) against line_status_all, a concept that only exists
+            # for a real Lucid/Arena bitmask. There is no equivalent "which
+            # bit" setting for OrcaFireControl's single flag, and this file's
+            # loader has no access to self._trigger_bit to target it
+            # specifically -- setting every bit means "triggered" reads as
+            # true under WHATEVER bit position the user has configured,
+            # Lucid recording or not, with no extra plumbing needed here.
+            trig_idx = header_row.index('trigger_sent') if 'trigger_sent' in header_row else None
+
             ns_vals = []
+            trig_vals = []
             for row in rows[1:]:
                 if ns_idx < len(row) and row[ns_idx].strip():
                     try:
                         ns_vals.append(float(row[ns_idx]))
                     except ValueError:
-                        pass
+                        continue
+                    else:
+                        trig_val = 0
+                        if trig_idx is not None and trig_idx < len(row) and row[trig_idx].strip():
+                            try:
+                                trig_val = 0xFFFF if float(row[trig_idx]) != 0 else 0
+                            except ValueError:
+                                trig_val = 0
+                        trig_vals.append(trig_val)
             if len(ns_vals) >= 2:
                 ts = (np.array(ns_vals, dtype=np.float64) - ns_vals[0]) * 1e-9  # -> seconds
+                line_statuses = (np.array(trig_vals, dtype=np.int64)
+                                 if trig_idx is not None else None)
                 span = ts[-1] - ts[0]
                 if span < 0.5:
-                    return ts * 1e3, 'ms', None, None, None
+                    return ts * 1e3, 'ms', None, None, line_statuses
                 if span < 120:
-                    return ts, 's', None, None, None
-                return ts / 60, 'min', None, None, None
+                    return ts, 's', None, None, line_statuses
+                return ts / 60, 'min', None, None, line_statuses
 
         # Group numeric values by column index
         num_cols = max(len(row) for row in rows)
