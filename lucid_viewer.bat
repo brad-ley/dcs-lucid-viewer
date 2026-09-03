@@ -1,5 +1,12 @@
 @echo off
 
+:: Some locked-down machines launch a shortcut's cmd.exe with a PATH that
+:: omits %SystemRoot%\System32 -- which breaks conda's activation hook,
+:: since it shells out to doskey.exe (System32\doskey.exe) to register the
+:: "conda" command. Prepending it here makes this launcher work regardless
+:: of whatever PATH the shortcut started with.
+set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%PATH%"
+
 set "SCRIPT=Z:\6. Software\prod_code\LucidVisionCamera\lucid_viewer.py"
 set ENV_NAME=dcs-datascripts
 
