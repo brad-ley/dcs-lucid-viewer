@@ -37,8 +37,28 @@ DEL "%PS1%" >nul 2>&1
 
 set "SCRIPT=Z:\6. Software\prod_code\LucidVisionCamera\lucid_viewer.py"
 set ENV_NAME=dcs-datascripts
+set GIT_BRANCH=master
 
 cd /d "Z:\6. Software\prod_code\LucidVisionCamera"
+
+:: ── Pull latest changes ──────────────────────────────────────────────────────
+set BASH1="%USERPROFILE%\AppData\Local\Programs\Git\bin\bash.exe"
+set BASH2="C:\Program Files\Git\bin\bash.exe"
+
+IF EXIST %BASH1% (
+    set "BASH=%BASH1%"
+) ELSE IF EXIST %BASH2% (
+    set "BASH=%BASH2%"
+) ELSE (
+    set "BASH="
+)
+
+IF DEFINED BASH (
+    echo Pulling latest changes...
+    %BASH% -l -c "cd '/z/6. Software/prod_code/LucidVisionCamera' && git checkout %GIT_BRANCH% && git pull origin %GIT_BRANCH%"
+) ELSE (
+    echo Git Bash not found -- skipping update check, using code already on disk.
+)
 
 :: ── Find conda ────────────────────────────────────────────────────────────────
 echo Looking for conda...
