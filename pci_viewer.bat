@@ -30,6 +30,7 @@ set "POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 >>"%PS1%"  echo }
 
 IF EXIST "%POWERSHELL%" (
+    echo Checking for desktop shortcut...
     "%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
 )
 DEL "%PS1%" >nul 2>&1
