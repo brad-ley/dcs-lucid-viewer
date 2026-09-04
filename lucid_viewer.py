@@ -437,7 +437,7 @@ def _load_timestamps(path: str):
             trig_idx = header_row.index('trigger_sent') if 'trigger_sent' in header_row else None
 
             ns_vals = []
-            trig_vals = []
+            trig_vals = []   # raw 0/1 per frame, expanded to an edge-only mask below
             for row in rows[1:]:
                 if ns_idx < len(row) and row[ns_idx].strip():
                     try:
@@ -448,14 +448,28 @@ def _load_timestamps(path: str):
                         trig_val = 0
                         if trig_idx is not None and trig_idx < len(row) and row[trig_idx].strip():
                             try:
-                                trig_val = 0xFFFF if float(row[trig_idx]) != 0 else 0
+                                trig_val = 1 if float(row[trig_idx]) != 0 else 0
                             except ValueError:
                                 trig_val = 0
                         trig_vals.append(trig_val)
             if len(ns_vals) >= 2:
                 ts = (np.array(ns_vals, dtype=np.float64) - ns_vals[0]) * 1e-9  # -> seconds
-                line_statuses = (np.array(trig_vals, dtype=np.int64)
-                                 if trig_idx is not None else None)
+
+                line_statuses = None
+                if trig_idx is not None and trig_vals:
+                    # trigger_sent is a level, not an event -- it reads 1 from
+                    # the estimated trigger frame through the END of the
+                    # recording (see frameTriggerSent() in the OrcaFireControl
+                    # repo), not just at the moment it fires. Marking every
+                    # one of those frames would paint a solid block of ticks
+                    # instead of one marker at the trigger -- only the RISING
+                    # EDGE (the first 0 -> 1 frame) is the actual event of
+                    # interest, so that is all that goes into line_statuses.
+                    raw = np.array(trig_vals, dtype=np.int64)
+                    was_zero_before = np.concatenate(([True], raw[:-1] == 0))
+                    rising_edge = (raw != 0) & was_zero_before
+                    line_statuses = np.where(rising_edge, 0xFFFF, 0).astype(np.int64)
+
                 span = ts[-1] - ts[0]
                 if span < 0.5:
                     return ts * 1e3, 'ms', None, None, line_statuses

@@ -40,6 +40,7 @@ set ENV_NAME=dcs-datascripts
 cd /d "Z:\6. Software\prod_code\LucidVisionCamera"
 
 :: ── Find conda ────────────────────────────────────────────────────────────────
+echo Looking for conda...
 set CONDA1=%USERPROFILE%\AppData\Local\miniconda3\condabin\conda.bat
 set CONDA2=%USERPROFILE%\miniconda3\condabin\conda.bat
 set CONDA3=C:\ProgramData\miniconda3\condabin\conda.bat
@@ -55,15 +56,20 @@ pause
 exit /b 1
 
 :conda_found
+echo Found conda: %CONDA%
 :: Derive conda root (two levels up from condabin\conda.bat)
 for %%i in ("%CONDA%\..\..") do set "CONDA_ROOT=%%~fi"
 set "PYTHON=%CONDA_ROOT%\envs\%ENV_NAME%\python.exe"
 
 :: ── Create environment if missing ─────────────────────────────────────────────
 IF NOT EXIST "%PYTHON%" (
-    echo Environment %ENV_NAME% not found. Creating from environment.yml...
+    echo Environment %ENV_NAME% not found. Creating from environment.yml, this may take a few minutes...
     CALL "%CONDA%" env create -n %ENV_NAME% -f "Z:\6. Software\prod_code\LucidVisionCamera\environment.yml"
+    echo Environment %ENV_NAME% created.
+) ELSE (
+    echo Using existing environment: %ENV_NAME%
 )
 
 :: ── Launch viewer ─────────────────────────────────────────────────────────────
+echo Launching PCI viewer...
 "%PYTHON%" "%SCRIPT%" %*
