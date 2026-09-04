@@ -19,13 +19,28 @@ set "SELFDIR=%~dp0"
 set "PS1=%TEMP%\pci_viewer_shortcut.ps1"
 set "POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 
+:: Explorer resolves and caches a shortcut's icon at render time (e.g. right
+:: after login), which can race ahead of the network redirector reconnecting
+:: a mapped drive on locked-down machines -- leaving the icon blank forever,
+:: even though the drive is available by the time you actually launch it.
+:: Same fix dcs-batch.bat's makeDesktopShortcutToBat.bat uses: copy the icon
+:: to a local, always-available path and point the shortcut at that instead
+:: of the network share.
+set "LOCAL_ICON_DIR=C:\ProgramData\PCIViewer"
+set "LOCAL_ICON=%LOCAL_ICON_DIR%\tv_png.ico"
+IF NOT EXIST "%LOCAL_ICON_DIR%" MKDIR "%LOCAL_ICON_DIR%"
+IF NOT EXIST "%LOCAL_ICON%" (
+    echo Copying icon to local directory...
+    COPY /Y "%SELFDIR%assets\tv_png.ico" "%LOCAL_ICON%" >nul
+)
+
 > "%PS1%"  echo $ws = New-Object -ComObject WScript.Shell
 >>"%PS1%"  echo $link = Join-Path $ws.SpecialFolders('Desktop') 'Single-frame PCI Viewer.lnk'
 >>"%PS1%"  echo if (-not (Test-Path $link)) {
 >>"%PS1%"  echo     $sc = $ws.CreateShortcut($link)
 >>"%PS1%"  echo     $sc.TargetPath = '%SELF%'
 >>"%PS1%"  echo     $sc.WorkingDirectory = '%SELFDIR%'
->>"%PS1%"  echo     $sc.IconLocation = '%SELFDIR%assets\tv_png.ico,0'
+>>"%PS1%"  echo     $sc.IconLocation = '%LOCAL_ICON%,0'
 >>"%PS1%"  echo     $sc.Save()
 >>"%PS1%"  echo }
 
