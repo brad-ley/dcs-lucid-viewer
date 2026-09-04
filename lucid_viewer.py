@@ -415,14 +415,16 @@ def _load_timestamps(path: str):
         if has_header and 'host_ns' in header_row and 'framestamp' in header_row:
             ns_idx = header_row.index('host_ns')
 
-            # trigger_sent is OrcaFireControl's own trigger marker: a plain
-            # 0/1 per frame, NOT a Lucid/Arena-style line_status_all bitmask
-            # -- it is a SOFTWARE ESTIMATE (camera-clock elapsed time since
-            # this run's first frame compared against the configured OUTPUT
-            # TRIGGER DELAY), not a hardware confirmation that a pulse
-            # actually reached the wire. See checkOutputTriggerAgainstFrame()
-            # and the trigger label's own tooltip in the OrcaFireControl repo
-            # for the exact caveat.
+            # trigger_status is OrcaFireControl's own trigger marker: a
+            # plain 0/1 per frame, NOT a Lucid/Arena-style line_status_all
+            # bitmask -- it is filled in once, after the recording stops,
+            # from an EPICS-confirmed hardware readback (the potentiostat's
+            # own sync-out, via a softGlue frame counter) cross-referenced
+            # against each frame's camera timestamp, not computed live
+            # during capture. See FrameRecorder::markTriggerFrame() in the
+            # OrcaFireControl repo. ('trigger_sent' is the same column under
+            # its old name, from recordings made before the rename -- still
+            # read here for backward compatibility with existing files.)
             #
             # Fed into line_statuses as 0xFFFF (all 16 bits set) rather than
             # bit 0 specifically: TriggerSlider/_trigger_frames test a single
@@ -434,7 +436,12 @@ def _load_timestamps(path: str):
             # specifically -- setting every bit means "triggered" reads as
             # true under WHATEVER bit position the user has configured,
             # Lucid recording or not, with no extra plumbing needed here.
-            trig_idx = header_row.index('trigger_sent') if 'trigger_sent' in header_row else None
+            if 'trigger_status' in header_row:
+                trig_idx = header_row.index('trigger_status')
+            elif 'trigger_sent' in header_row:
+                trig_idx = header_row.index('trigger_sent')
+            else:
+                trig_idx = None
 
             ns_vals = []
             trig_vals = []   # raw 0/1 per frame, expanded to an edge-only mask below
@@ -457,11 +464,12 @@ def _load_timestamps(path: str):
 
                 line_statuses = None
                 if trig_idx is not None and trig_vals:
-                    # trigger_sent is a level, not an event -- it reads 1 from
-                    # the estimated trigger frame through the END of the
-                    # recording (see frameTriggerSent() in the OrcaFireControl
-                    # repo), not just at the moment it fires. Marking every
-                    # one of those frames would paint a solid block of ticks
+                    # trigger_status is a level, not an event -- it reads 1
+                    # from the hardware-confirmed trigger frame through the
+                    # END of the recording (see FrameRecorder::
+                    # markTriggerFrame() in the OrcaFireControl repo), not
+                    # just at the moment it fires. Marking every one of
+                    # those frames would paint a solid block of ticks
                     # instead of one marker at the trigger -- only the RISING
                     # EDGE (the first 0 -> 1 frame) is the actual event of
                     # interest, so that is all that goes into line_statuses.
