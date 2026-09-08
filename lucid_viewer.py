@@ -25,7 +25,8 @@ from PyQt6.QtWidgets import (
     QGroupBox, QGridLayout, QSpinBox, QFormLayout,
     QSplitter, QMessageBox, QSlider, QCheckBox, QSizePolicy,
     QDialog, QProgressBar, QDialogButtonBox, QFrame, QMenu,
-    QInputDialog,
+    QInputDialog, QTableWidget, QTableWidgetItem, QHeaderView,
+    QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon
@@ -1743,6 +1744,55 @@ class _GifExportDialog(QDialog):
         return self._fps_spin.value()
 
 
+class _JsonTableDialog(QDialog):
+    """Read-only Property / Value table for a settings .json file (the
+    recording sidecar, or OrcaFireControl's camera_properties.json) -- lets
+    someone glance at what a run was actually configured with without
+    leaving the app to find and open a .json file in a text editor."""
+
+    def __init__(self, title: str, subtitle: str, rows, parent=None, stylesheet=''):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumSize(480, 420)
+        if stylesheet:
+            self.setStyleSheet(stylesheet)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        if subtitle:
+            subtitle_lbl = QLabel(subtitle)
+            subtitle_lbl.setWordWrap(True)
+            subtitle_lbl.setStyleSheet('color: #888; font-size: 10px;')
+            layout.addWidget(subtitle_lbl)
+
+        table = QTableWidget(len(rows), 2)
+        table.setHorizontalHeaderLabels(['Property', 'Value'])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for row, (name, value) in enumerate(rows):
+            name_item = QTableWidgetItem(str(name))
+            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            value_item = QTableWidgetItem(str(value))
+            value_item.setFlags(value_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            table.setItem(row, 0, name_item)
+            table.setItem(row, 1, value_item)
+        # Populate BEFORE enabling sorting -- QTableWidget re-sorts on every
+        # setItem() otherwise, which is both slow and can scramble row pairs
+        # if it interrupts a row half-written.
+        table.setSortingEnabled(True)
+        layout.addWidget(table)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+
 class _PcaSettingsDialog(QDialog):
     """PCA-specific settings: Gaussian-blur dual-resolution projection and universal mode."""
 
@@ -2416,6 +2466,30 @@ class LucidViewer(ViewerMixin, QMainWindow):
             v = QLabel('—')
             self._meta_vals.append(v)
             meta_grid.addWidget(v, row, 1)
+
+        # Both open a Property/Value table for the run's .json metadata --
+        # the whole point being not having to leave the app, find the file,
+        # and read it in a text editor. Disabled until a recording is
+        # loaded; enabled in _open_reader() alongside the rest of this box.
+        settings_row = QHBoxLayout()
+        self.recording_settings_btn = QPushButton('Recording Settings…')
+        self.recording_settings_btn.setEnabled(False)
+        self.recording_settings_btn.setToolTip(
+            "This recording's .json sidecar (trigger timing, notes, "
+            'acquisition parameters) as a Property/Value table.')
+        self.recording_settings_btn.clicked.connect(self._show_recording_settings)
+        settings_row.addWidget(self.recording_settings_btn)
+        self.camera_settings_btn = QPushButton('Camera Settings…')
+        self.camera_settings_btn.setEnabled(False)
+        self.camera_settings_btn.setToolTip(
+            "This recording's camera_properties.json (every writable DCAM "
+            'property as it was set for this run) as a Property/Value table.')
+        self.camera_settings_btn.clicked.connect(self._show_camera_settings)
+        settings_row.addWidget(self.camera_settings_btn)
+        settings_row_widget = QWidget()
+        settings_row_widget.setLayout(settings_row)
+        meta_grid.addWidget(settings_row_widget, len(self._meta_vals), 0, 1, 2)
+
         sb.addWidget(meta_box)
 
         # Display
@@ -2697,6 +2771,78 @@ class LucidViewer(ViewerMixin, QMainWindow):
             if idx >= 0:
                 self.fmt_combo.setCurrentIndex(idx)
 
+    def _show_recording_settings(self):
+        """File info > Recording Settings... -- the parsed sidecar dict
+        (self._sidecar, set by _apply_hints() above) as a Property/Value
+        table. Uses the in-memory copy rather than re-reading from disk --
+        it's the exact same content, and avoids re-deriving _load_sidecar()'s
+        own metadata.json/<stem>.json/<path>.json search a second time."""
+        if not self._sidecar:
+            QMessageBox.information(
+                self, 'Recording Settings',
+                f'{self._sidecar_status}\n\nNothing to show.')
+            return
+        rows = []
+        for key, value in self._sidecar.items():
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value)
+            rows.append((key, value))
+        dlg = _JsonTableDialog('Recording Settings', self._sidecar_status,
+                               rows, parent=self, stylesheet=_DARK_STYLE)
+        dlg.exec()
+
+    def _show_camera_settings(self):
+        """File info > Camera Settings... -- OrcaFireControl's
+        camera_properties.json (every writable DCAM property as captured at
+        Start, see PropertySnapshot::capture() in that app) as a
+        Property/Value table. Unlike the sidecar, this isn't loaded into
+        memory anywhere else in the viewer, so it's read fresh here."""
+        if not self._path:
+            return
+        cam_path = os.path.join(os.path.dirname(self._path), 'camera_properties.json')
+        if not os.path.isfile(cam_path):
+            QMessageBox.information(
+                self, 'Camera Settings',
+                'No camera_properties.json found in this recording\'s folder.\n\n'
+                '(Only written by OrcaFireControl at Start -- not by every '
+                'capture source this viewer opens.)')
+            return
+
+        data = None
+        for enc in ('utf-8-sig', 'utf-16', 'latin-1'):
+            try:
+                with open(cam_path, 'r', encoding=enc) as fh:
+                    data = json.load(fh)
+                break
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+            except Exception as exc:
+                QMessageBox.warning(self, 'Camera Settings',
+                                    f'Could not read {cam_path}:\n{exc}')
+                return
+        if data is None:
+            QMessageBox.warning(self, 'Camera Settings',
+                                f'Could not decode {cam_path} in any known encoding.')
+            return
+
+        # {"<propId>": {"name": "...", "value": ...}, ...} -- see
+        # PropertySnapshot::capture() in the OrcaFireControl source. The
+        # numeric property ID is meaningless to a human, so this shows just
+        # name + value, sorted alphabetically the same way that app's own
+        # Camera Properties table does by default.
+        rows = []
+        for entry in data.values():
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get('name', '(unnamed)')
+            value = entry.get('value', '')
+            rows.append((name, value))
+        rows.sort(key=lambda r: r[0])
+
+        dlg = _JsonTableDialog('Camera Settings', cam_path, rows,
+                               parent=self, stylesheet=_DARK_STYLE)
+        dlg.exec()
+
     def _reopen(self):
         if self._path:
             self._cache.clear()
@@ -2826,6 +2972,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         for lbl, key, val in zip(self._meta_vals, _meta_keys, _meta_data):
             lbl.setText(val)
             lbl.setToolTip(f'{key}: {val}')
+
+        self.recording_settings_btn.setEnabled(True)
+        self.camera_settings_btn.setEnabled(True)
 
         if ext == '.raw':
             bpf = getattr(reader, 'bpf', None)
