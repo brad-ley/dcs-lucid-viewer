@@ -781,7 +781,15 @@ def _compute_pca_from_frames(frames, n_components=20, blur_sigma=0.0, progress_c
       mean_low/components_low:   Gaussian-blurred PCA for dual-resolution
                                  projection (None when blur_sigma <= 0)
     """
+    # Diagnostic-only timing: prints elapsed seconds since this call started
+    # next to each phase, to the console the app was launched from. Added to
+    # pin down a reported ~10s freeze that lands right around "normalizing
+    # components" -- printed regardless of whether progress_cb is wired up,
+    # so it shows even if this is ever called outside the worker thread.
+    _t_start = time.monotonic()
+
     def _prog(msg):
+        print(f'[pca timing] +{time.monotonic() - _t_start:6.2f}s  {msg}', flush=True)
         if progress_cb:
             progress_cb(msg)
 
@@ -791,6 +799,8 @@ def _compute_pca_from_frames(frames, n_components=20, blur_sigma=0.0, progress_c
     H, W = frames[0].shape
     N = H * W
     n_components = min(n_components, K - 1)
+    _prog(f'PCA: starting -- K={K} frames, H={H}, W={W}, N={N:,} px, '
+          f'X≈{K * N * 4 / 1e9:.2f} GB')
 
     mu_low = None
     V_low  = None
@@ -857,12 +867,14 @@ def _compute_pca_from_frames(frames, n_components=20, blur_sigma=0.0, progress_c
     del eigenvectors
     V = evecs.dot(X)
     del X, evecs
-    _prog('PCA: normalizing components…')
+    _prog(f'PCA: normalizing components… (V≈{V.nbytes / 1e9:.2f} GB)')
 
     norms = np.linalg.norm(V, axis=1, keepdims=True)
+    _prog('PCA: normalizing components… (norm done, dividing)')
     np.maximum(norms, 1e-10, out=norms)
     V /= norms
     components = V
+    _prog('PCA: normalizing components… (divide done)')
 
     total_var = float(max(eigenvalues[eigenvalues > 0].sum(), 1e-12))
     explained = (eigenvalues[:n_components] / total_var).astype(np.float32)
@@ -1270,7 +1282,11 @@ class PcaComputeWorker(QThread):
             mu, comp, expl, mu_low, comp_low = _compute_pca_from_frames(
                 frames, n_store, blur_sigma=self._blur_sigma,
                 progress_cb=lambda msg: self.pca_progress.emit(msg))
+            print(f'[pca timing] worker thread: about to emit pca_done '
+                  f'at {time.monotonic():.2f}', flush=True)
             self.pca_done.emit(mu, comp, expl, mu_low, comp_low)
+            print(f'[pca timing] worker thread: pca_done.emit() returned '
+                  f'at {time.monotonic():.2f}', flush=True)
         except Exception as exc:
             self.pca_error.emit(str(exc))
 
@@ -1487,42 +1503,6 @@ class FieldLoadWorker(QThread):
         except Exception as e:
             print(f'[field] error loading {target}: {e}')
             return None
-
-
-class InitialFrameWorker(QThread):
-    """Applies field correction to one already-loaded frame and computes its
-    3rd/97th-percentile display levels, off the GUI thread.
-
-    Used right after a PCA fit/adaptation finishes to redraw the frame
-    already on screen with the new correction: _apply_field_correction()
-    (an FFT-based Gaussian blur at full sensor resolution, when PCA blur
-    mode is on) plus two np.percentile() calls over 24+ megapixels can
-    together take several seconds. Long enough, run synchronously on the
-    GUI thread, to stop the message loop being pumped and trip Windows'
-    "(Not Responding)" ghosting -- unlike normal frame-to-frame scrubbing,
-    which skips both the percentile calls (autoLevels only applies to the
-    very first frame shown after a file opens) and is fast enough that it
-    was never reported as laggy.
-    """
-    done  = pyqtSignal(object, float, float)   # display_frame, lo, hi
-    error = pyqtSignal(str)
-
-    def __init__(self, correction_fn, frame, data_gain, parent=None):
-        super().__init__(parent)
-        self._correction_fn = correction_fn
-        self._frame         = frame
-        self._data_gain     = data_gain
-
-    def run(self):
-        try:
-            display_frame = self._correction_fn(self._frame, data_gain=self._data_gain)
-            lo = float(np.percentile(display_frame, 3))
-            hi = float(np.percentile(display_frame, 97))
-            if hi <= lo:
-                hi = lo + 1
-            self.done.emit(display_frame, lo, hi)
-        except Exception as exc:
-            self.error.emit(str(exc))
 
 
 TIFF_COMPRESSIONS = ['None', 'LZW', 'Deflate', 'ZSTD']
@@ -2273,7 +2253,6 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._cell_adapt_worker         = None   # CellAdaptWorker while adapting
         self._dark_field_worker         = None   # FieldLoadWorker for dark field
         self._white_flat_worker         = None   # FieldLoadWorker for flat white field
-        self._initial_frame_worker      = None   # InitialFrameWorker for post-PCA-fit redraw
         self._stored_field_refs = {}     # field_references loaded from sidecar
         self._play_timer        = None   # QTimer driving playback
         self._play_start_wall   = 0.0    # time.monotonic() when play started
@@ -3716,6 +3695,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _on_pca_computed(self, mean, components, explained, mean_low, components_low,
                          cache_path, folder):
+        print(f'[pca timing] GUI thread: _on_pca_computed entered '
+              f'at {time.monotonic():.2f}', flush=True)
         if self._white_mode != 'pca':
             self._hide_corr_progress()
             return
@@ -3761,52 +3742,23 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _launch_initial_frame_refresh(self):
         """Redraw the currently-displayed frame with the correction that just
-        finished fitting, off the GUI thread (see InitialFrameWorker) --
-        called instead of _refresh_current_frame()/_auto_levels() so that the
-        expensive part (field correction + percentile levels at full sensor
-        resolution) doesn't run synchronously on the GUI thread and trip
-        Windows' "(Not Responding)" ghosting right as the fit finishes."""
-        if self._reader is None:
+        finished fitting.
+
+        Reverted from a background-thread version: it introduced a real
+        contrast/levels regression (reported after testing) without actually
+        fixing the reported freeze -- the freeze turned out to still be
+        happening earlier, inside the PCA fit itself (see the timing prints
+        added to _compute_pca_from_frames), not here. Going back to the
+        proven-correct synchronous calls until that's root-caused; a wait
+        cursor at least keeps this specific step from looking silently
+        broken while it runs."""
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._refresh_current_frame()
+            self._auto_levels()
+        finally:
+            QApplication.restoreOverrideCursor()
             self._hide_corr_progress()
-            return
-        idx = self.frame_slider.value()
-        frame = self._cache.get(idx)
-        if frame is None:
-            # Same cache-fill fallback _show_frame() uses -- normally
-            # already cached from having displayed this frame before
-            # triggering the fit, but not guaranteed (e.g. a fresh file).
-            try:
-                frame = self._reader[idx]
-            except Exception as exc:
-                self._hide_corr_progress()
-                self.statusBar().showMessage(f'Read error frame {idx}: {exc}')
-                return
-            if len(self._cache) >= self._cache_max:
-                oldest = next(iter(self._cache))
-                del self._cache[oldest]
-            self._cache[idx] = frame
-        data_gain = (self._gains[idx] if self._gains is not None and idx < len(self._gains)
-                     else None)
-        if self._initial_frame_worker is not None:
-            self._initial_frame_worker.done.disconnect()
-            self._initial_frame_worker.error.disconnect()
-            self._initial_frame_worker.quit()
-        self._initial_frame_worker = InitialFrameWorker(
-            self._apply_field_correction, frame, data_gain, parent=self)
-        self._initial_frame_worker.done.connect(self._on_initial_frame_done)
-        self._initial_frame_worker.error.connect(self._on_initial_frame_error)
-        self._initial_frame_worker.start()
-
-    def _on_initial_frame_done(self, display_frame, lo, hi):
-        self.imview.setImage(display_frame, autoLevels=False, autoRange=False)
-        self.imview.setLevels(lo, hi)
-        self._pixel_inspector.update(display_frame)
-        self._hide_corr_progress()
-
-    def _on_initial_frame_error(self, msg):
-        self.corr_status_lbl.setText(f'Display error: {msg}')
-        self.corr_status_lbl.setStyleSheet('color: #ff6b6b; font-size: 10px;')
-        self._hide_corr_progress()
 
     # ------------------------------------------------------------------ #
     # Universal PCA (cell-transform) methods                               #
@@ -4970,9 +4922,6 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if self._cell_adapt_worker is not None:
             self._cell_adapt_worker.quit()
             self._cell_adapt_worker.wait(2000)
-        if self._initial_frame_worker is not None:
-            self._initial_frame_worker.quit()
-            self._initial_frame_worker.wait(2000)
         if self._export_worker is not None:
             self._export_worker.cancel()
             self._export_worker.wait()
