@@ -1291,9 +1291,25 @@ class PcaComputeWorker(QThread):
             mu, comp, expl, mu_low, comp_low = _compute_pca_from_frames(
                 frames, n_store, blur_sigma=self._blur_sigma,
                 progress_cb=lambda msg: self.pca_progress.emit(msg))
+
+            # Emit BEFORE saving the .npz cache, not after: the fit itself is
+            # fast (~2s even at full sensor resolution -- see [pca timing]),
+            # but np.savez_compressed of a ~1 GB array measured at 30+
+            # seconds on a network share. There is no reason the viewer
+            # should sit on a frozen progress bar for that -- the cache only
+            # ever speeds up a FUTURE reopen of this same white-field folder,
+            # nothing on screen right now depends on it. mu/comp/mu_low/
+            # comp_low are safe to keep reading (here, for the save below)
+            # after handing them to the GUI thread: nothing downstream of
+            # pca_done ever mutates them in place, only reads.
+            print(f'[pca timing] worker thread: about to emit pca_done '
+                  f'at {time.monotonic():.2f}', flush=True)
+            self.pca_done.emit(mu, comp, expl, mu_low, comp_low)
+            print(f'[pca timing] worker thread: pca_done.emit() returned '
+                  f'at {time.monotonic():.2f}', flush=True)
+
             if self._cache_path is not None:
                 t0 = time.monotonic()
-                self.pca_progress.emit('PCA: saving cache…')
                 try:
                     save_kw = dict(mean=mu, components=comp, explained=expl)
                     if mu_low is not None and comp_low is not None:
@@ -1304,11 +1320,6 @@ class PcaComputeWorker(QThread):
                     print(f'[pca] cache save error: {exc}')
                 print(f'[pca timing] cache save took '
                       f'{time.monotonic() - t0:.2f}s', flush=True)
-            print(f'[pca timing] worker thread: about to emit pca_done '
-                  f'at {time.monotonic():.2f}', flush=True)
-            self.pca_done.emit(mu, comp, expl, mu_low, comp_low)
-            print(f'[pca timing] worker thread: pca_done.emit() returned '
-                  f'at {time.monotonic():.2f}', flush=True)
         except Exception as exc:
             self.pca_error.emit(str(exc))
 
@@ -2605,6 +2616,25 @@ class LucidViewer(ViewerMixin, QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, self._toggle_play)
 
     # ── File loading ──────────────────────────────────────────────────────────
+    @staticmethod
+    def _parent_dir_of(path: str) -> str:
+        """Where every folder-picker dialog in this app should start: one
+        level up from *path* (a file, or a folder someone already picked),
+        not AT it.
+
+        Every recording/calibration folder in this lab's layout is one of a
+        set of SIBLING folders (separate run folders, or a run folder next to
+        its own white/dark/master calibration folders) -- so the useful
+        starting point for "pick a folder" is always the common parent that
+        shows those siblings side by side, never a folder already chosen for
+        something else (its own contents are what's INSIDE it, not what else
+        is available to pick). getExistingDirectory's own default -- reopening
+        at its last-selected folder -- gets this backwards, dropping the
+        dialog inside that folder instead. Returns '' (Qt's own default
+        start location) when there is nothing to base it on yet.
+        """
+        return os.path.dirname(os.path.dirname(path)) if path else ''
+
     def open_file(self):
         # A folder picker, not a file picker -- every recording (OrcaFireControl
         # or a Lucid calibration capture) writes exactly one stack file per run
@@ -2612,17 +2642,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         # picker in this app (white/dark/PCA field folders) already works this
         # way; making the user drill into the folder and pick the one file by
         # name here was an inconsistency, not a real choice.
-        # Start one level up from the last recording FOLDER (last_path is a
-        # full file path, so dirname(dirname(...)) is that file's folder's
-        # parent), not inside it -- getExistingDirectory's default of
-        # reopening its own last-selected folder puts the dialog INSIDE the
-        # folder just loaded, showing its .raw/.json/.csv contents instead of
-        # the sibling run folders a user picking a DIFFERENT recording
-        # actually wants to see.
         last = self._settings.value('last_path', '')
-        start_dir = os.path.dirname(os.path.dirname(last)) if last else ''
         folder = QFileDialog.getExistingDirectory(
-            self, 'Select recording folder', start_dir)
+            self, 'Select recording folder', self._parent_dir_of(last))
         if not folder:
             return
         path = self._resolve_recording_file(folder)
@@ -3993,7 +4015,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             master_folder=self._pca_master_folder,
             master_folder_mode=self._pca_master_folder_mode,
             find_fn=self._find_master_folder,
-            start_dir=os.path.dirname(self._path) if self._path else '',
+            start_dir=self._parent_dir_of(self._path),
             parent=self, stylesheet=self.styleSheet())
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
@@ -4246,7 +4268,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _select_white_folder(self):
         """File menu: let user manually choose a white field folder."""
-        start = os.path.dirname(self._path) if self._path else ''
+        start = self._parent_dir_of(self._path)
         folder = QFileDialog.getExistingDirectory(self, 'Select white field folder', start)
         if not folder:
             return
@@ -4261,7 +4283,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         In Universal PCA mode the selected folder is used as the cell-present white
         field source (W_cell) without switching the correction mode.  In all other
         modes this works as before: switch to flat-field and load the mean frame."""
-        start = os.path.dirname(self._path) if self._path else ''
+        start = self._parent_dir_of(self._path)
         folder = QFileDialog.getExistingDirectory(
             self, 'Select flat white field folder (mean)', start)
         if not folder:
@@ -4287,7 +4309,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _select_white_pca_folder(self):
         """Config → Set White Field → PCA…"""
-        start = os.path.dirname(self._path) if self._path else ''
+        start = self._parent_dir_of(self._path)
         folder = QFileDialog.getExistingDirectory(
             self, 'Select multi-frame white field folder (PCA)', start)
         if not folder:
@@ -4335,7 +4357,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _select_master_folder(self):
         """Config → Set White Field → Master PCA → Choose Folder…"""
-        start = os.path.dirname(self._path) if self._path else ''
+        start = self._parent_dir_of(self._path)
         folder = QFileDialog.getExistingDirectory(
             self, 'Select master white field folder (clean, no cell)', start)
         if not folder:
@@ -4354,7 +4376,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _select_dark_folder(self):
         """File menu: let user manually choose a dark field folder."""
-        start = os.path.dirname(self._path) if self._path else ''
+        start = self._parent_dir_of(self._path)
         folder = QFileDialog.getExistingDirectory(self, 'Select dark field folder', start)
         if not folder:
             return
