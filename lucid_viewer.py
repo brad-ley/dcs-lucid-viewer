@@ -781,15 +781,7 @@ def _compute_pca_from_frames(frames, n_components=20, blur_sigma=0.0, progress_c
       mean_low/components_low:   Gaussian-blurred PCA for dual-resolution
                                  projection (None when blur_sigma <= 0)
     """
-    # Diagnostic-only timing: prints elapsed seconds since this call started
-    # next to each phase, to the console the app was launched from. Added to
-    # pin down a reported ~10s freeze that lands right around "normalizing
-    # components" -- printed regardless of whether progress_cb is wired up,
-    # so it shows even if this is ever called outside the worker thread.
-    _t_start = time.monotonic()
-
     def _prog(msg):
-        print(f'[pca timing] +{time.monotonic() - _t_start:6.2f}s  {msg}', flush=True)
         if progress_cb:
             progress_cb(msg)
 
@@ -799,8 +791,6 @@ def _compute_pca_from_frames(frames, n_components=20, blur_sigma=0.0, progress_c
     H, W = frames[0].shape
     N = H * W
     n_components = min(n_components, K - 1)
-    _prog(f'PCA: starting -- K={K} frames, H={H}, W={W}, N={N:,} px, '
-          f'X≈{K * N * 4 / 1e9:.2f} GB')
 
     mu_low = None
     V_low  = None
@@ -867,14 +857,12 @@ def _compute_pca_from_frames(frames, n_components=20, blur_sigma=0.0, progress_c
     del eigenvectors
     V = evecs.dot(X)
     del X, evecs
-    _prog(f'PCA: normalizing components… (V≈{V.nbytes / 1e9:.2f} GB)')
+    _prog('PCA: normalizing components…')
 
     norms = np.linalg.norm(V, axis=1, keepdims=True)
-    _prog('PCA: normalizing components… (norm done, dividing)')
     np.maximum(norms, 1e-10, out=norms)
     V /= norms
     components = V
-    _prog('PCA: normalizing components… (divide done)')
 
     total_var = float(max(eigenvalues[eigenvalues > 0].sum(), 1e-12))
     explained = (eigenvalues[:n_components] / total_var).astype(np.float32)
@@ -1293,23 +1281,17 @@ class PcaComputeWorker(QThread):
                 progress_cb=lambda msg: self.pca_progress.emit(msg))
 
             # Emit BEFORE saving the .npz cache, not after: the fit itself is
-            # fast (~2s even at full sensor resolution -- see [pca timing]),
-            # but np.savez_compressed of a ~1 GB array measured at 30+
-            # seconds on a network share. There is no reason the viewer
-            # should sit on a frozen progress bar for that -- the cache only
-            # ever speeds up a FUTURE reopen of this same white-field folder,
-            # nothing on screen right now depends on it. mu/comp/mu_low/
-            # comp_low are safe to keep reading (here, for the save below)
-            # after handing them to the GUI thread: nothing downstream of
-            # pca_done ever mutates them in place, only reads.
-            print(f'[pca timing] worker thread: about to emit pca_done '
-                  f'at {time.monotonic():.2f}', flush=True)
+            # fast even at full sensor resolution, but np.savez_compressed of
+            # a ~1 GB array can take 30+ seconds on a network share. There is
+            # no reason the viewer should sit waiting on that -- the cache
+            # only ever speeds up a FUTURE reopen of this same white-field
+            # folder, nothing on screen right now depends on it. mu/comp/
+            # mu_low/comp_low are safe to keep reading (here, for the save
+            # below) after handing them to the GUI thread: nothing downstream
+            # of pca_done ever mutates them in place, only reads.
             self.pca_done.emit(mu, comp, expl, mu_low, comp_low)
-            print(f'[pca timing] worker thread: pca_done.emit() returned '
-                  f'at {time.monotonic():.2f}', flush=True)
 
             if self._cache_path is not None:
-                t0 = time.monotonic()
                 try:
                     save_kw = dict(mean=mu, components=comp, explained=expl)
                     if mu_low is not None and comp_low is not None:
@@ -1318,8 +1300,6 @@ class PcaComputeWorker(QThread):
                     np.savez_compressed(self._cache_path, **save_kw)
                 except Exception as exc:
                     print(f'[pca] cache save error: {exc}')
-                print(f'[pca timing] cache save took '
-                      f'{time.monotonic() - t0:.2f}s', flush=True)
         except Exception as exc:
             self.pca_error.emit(str(exc))
 
@@ -3746,8 +3726,6 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _on_pca_computed(self, mean, components, explained, mean_low, components_low,
                          folder):
-        print(f'[pca timing] GUI thread: _on_pca_computed entered '
-              f'at {time.monotonic():.2f}', flush=True)
         if self._white_mode != 'pca':
             self._hide_corr_progress()
             return
@@ -3787,26 +3765,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _launch_initial_frame_refresh(self):
         """Redraw the currently-displayed frame with the correction that just
-        finished fitting.
-
-        Reverted from a background-thread version: it introduced a real
-        contrast/levels regression without actually fixing the reported
-        freeze. Timing data pointed at _on_pca_computed()'s body (entered
-        promptly after the fit, per the GUI-thread print there) rather than
-        the fit itself -- np.savez_compressed() has since been moved into
-        PcaComputeWorker's own thread, which should account for a good chunk
-        of that. The [pca timing] prints below bracket what's left here
-        (_refresh_current_frame()/_auto_levels(), still synchronous) to see
-        whether it's still worth threading."""
-        _t0 = time.monotonic()
+        finished fitting. Synchronous (unlike the fit itself and its cache
+        save, both backgrounded in PcaComputeWorker) -- measured well under a
+        second even at full sensor resolution, so it isn't worth threading;
+        the wait cursor is just a courtesy for that brief moment."""
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             self._refresh_current_frame()
-            print(f'[pca timing] _refresh_current_frame() done at '
-                  f'+{time.monotonic() - _t0:.2f}s', flush=True)
             self._auto_levels()
-            print(f'[pca timing] _auto_levels() done at '
-                  f'+{time.monotonic() - _t0:.2f}s', flush=True)
         finally:
             QApplication.restoreOverrideCursor()
             self._hide_corr_progress()
