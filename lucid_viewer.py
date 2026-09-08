@@ -1259,7 +1259,8 @@ class PcaComputeWorker(QThread):
     pca_error    = pyqtSignal(str)
     pca_progress = pyqtSignal(str)                     # status message for UI
 
-    def __init__(self, folder, fmt, w, h, n_components=20, blur_sigma=0, parent=None):
+    def __init__(self, folder, fmt, w, h, n_components=20, blur_sigma=0,
+                 cache_path=None, parent=None):
         super().__init__(parent)
         self._folder       = folder
         self._fmt          = fmt
@@ -1267,6 +1268,14 @@ class PcaComputeWorker(QThread):
         self._h            = h
         self._n_components = n_components
         self._blur_sigma   = blur_sigma
+        # Optional: when given, the .npz cache is written here in THIS
+        # thread before pca_done fires, instead of by the GUI-thread slot --
+        # np.savez_compressed of up to ~1+ GB can be slow, especially over a
+        # network share, and disk I/O on the GUI thread is never a good idea
+        # regardless of how it measures. None when this instance only exists
+        # to reuse _load_frames() (see CellAdaptWorker.run()), which never
+        # calls run() and so never reaches this at all.
+        self._cache_path   = cache_path
 
     def run(self):
         try:
@@ -1282,6 +1291,19 @@ class PcaComputeWorker(QThread):
             mu, comp, expl, mu_low, comp_low = _compute_pca_from_frames(
                 frames, n_store, blur_sigma=self._blur_sigma,
                 progress_cb=lambda msg: self.pca_progress.emit(msg))
+            if self._cache_path is not None:
+                t0 = time.monotonic()
+                self.pca_progress.emit('PCA: saving cache…')
+                try:
+                    save_kw = dict(mean=mu, components=comp, explained=expl)
+                    if mu_low is not None and comp_low is not None:
+                        save_kw['mean_low']       = mu_low
+                        save_kw['components_low'] = comp_low
+                    np.savez_compressed(self._cache_path, **save_kw)
+                except Exception as exc:
+                    print(f'[pca] cache save error: {exc}')
+                print(f'[pca timing] cache save took '
+                      f'{time.monotonic() - t0:.2f}s', flush=True)
             print(f'[pca timing] worker thread: about to emit pca_done '
                   f'at {time.monotonic():.2f}', flush=True)
             self.pca_done.emit(mu, comp, expl, mu_low, comp_low)
@@ -2590,8 +2612,15 @@ class LucidViewer(ViewerMixin, QMainWindow):
         # picker in this app (white/dark/PCA field folders) already works this
         # way; making the user drill into the folder and pick the one file by
         # name here was an inconsistency, not a real choice.
+        # Start one level up from the last recording FOLDER (last_path is a
+        # full file path, so dirname(dirname(...)) is that file's folder's
+        # parent), not inside it -- getExistingDirectory's default of
+        # reopening its own last-selected folder puts the dialog INSIDE the
+        # folder just loaded, showing its .raw/.json/.csv contents instead of
+        # the sibling run folders a user picking a DIFFERENT recording
+        # actually wants to see.
         last = self._settings.value('last_path', '')
-        start_dir = os.path.dirname(last) if last else ''
+        start_dir = os.path.dirname(os.path.dirname(last)) if last else ''
         folder = QFileDialog.getExistingDirectory(
             self, 'Select recording folder', start_dir)
         if not folder:
@@ -3683,10 +3712,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_worker = PcaComputeWorker(
             folder, fmt, w, h, n_components=n_train,
             blur_sigma=self._pca_blur_sigma if self._pca_blur_enabled else 0,
-            parent=self)
+            cache_path=cache_path, parent=self)
         self._pca_worker.pca_done.connect(
-            lambda mu, comp, expl, mu_low, comp_low, _cp=cache_path, _f=folder:
-                self._on_pca_computed(mu, comp, expl, mu_low, comp_low, _cp, _f)
+            lambda mu, comp, expl, mu_low, comp_low, _f=folder:
+                self._on_pca_computed(mu, comp, expl, mu_low, comp_low, _f)
         )
         self._pca_worker.pca_error.connect(self._on_pca_error)
         self._pca_worker.pca_progress.connect(self._on_pca_progress)
@@ -3694,7 +3723,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_worker.start()
 
     def _on_pca_computed(self, mean, components, explained, mean_low, components_low,
-                         cache_path, folder):
+                         folder):
         print(f'[pca timing] GUI thread: _on_pca_computed entered '
               f'at {time.monotonic():.2f}', flush=True)
         if self._white_mode != 'pca':
@@ -3706,14 +3735,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_components_low    = components_low
         self._pca_shape             = (self._reader.h, self._reader.w) if self._reader else None
         self._pca_folder            = folder
-        try:
-            save_kw = dict(mean=mean, components=components, explained=explained)
-            if mean_low is not None and components_low is not None:
-                save_kw['mean_low']       = mean_low
-                save_kw['components_low'] = components_low
-            np.savez_compressed(cache_path, **save_kw)
-        except Exception as exc:
-            print(f'[pca] cache save error: {exc}')
+        # cache_path is written by PcaComputeWorker itself now (see its
+        # run()), off the GUI thread -- nothing left to save here.
         n_stored = components.shape[0]
         n_auto = _auto_pca_n(explained)
         self.pca_n_spin.blockSignals(True)
@@ -3745,17 +3768,23 @@ class LucidViewer(ViewerMixin, QMainWindow):
         finished fitting.
 
         Reverted from a background-thread version: it introduced a real
-        contrast/levels regression (reported after testing) without actually
-        fixing the reported freeze -- the freeze turned out to still be
-        happening earlier, inside the PCA fit itself (see the timing prints
-        added to _compute_pca_from_frames), not here. Going back to the
-        proven-correct synchronous calls until that's root-caused; a wait
-        cursor at least keeps this specific step from looking silently
-        broken while it runs."""
+        contrast/levels regression without actually fixing the reported
+        freeze. Timing data pointed at _on_pca_computed()'s body (entered
+        promptly after the fit, per the GUI-thread print there) rather than
+        the fit itself -- np.savez_compressed() has since been moved into
+        PcaComputeWorker's own thread, which should account for a good chunk
+        of that. The [pca timing] prints below bracket what's left here
+        (_refresh_current_frame()/_auto_levels(), still synchronous) to see
+        whether it's still worth threading."""
+        _t0 = time.monotonic()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             self._refresh_current_frame()
+            print(f'[pca timing] _refresh_current_frame() done at '
+                  f'+{time.monotonic() - _t0:.2f}s', flush=True)
             self._auto_levels()
+            print(f'[pca timing] _auto_levels() done at '
+                  f'+{time.monotonic() - _t0:.2f}s', flush=True)
         finally:
             QApplication.restoreOverrideCursor()
             self._hide_corr_progress()
@@ -3859,27 +3888,18 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._pca_worker.quit()
         n_train = min(20, self._pca_n_components + 2)
         self._pca_worker = PcaComputeWorker(
-            master, fmt, w, h, n_components=n_train, blur_sigma=blur_sigma, parent=self)
-        self._pca_worker.pca_done.connect(
-            lambda mu, comp, expl, mu_low, comp_low, _cp=cache_path:
-                self._on_master_pca_computed(mu, comp, expl, mu_low, comp_low, _cp)
-        )
+            master, fmt, w, h, n_components=n_train, blur_sigma=blur_sigma,
+            cache_path=cache_path, parent=self)
+        self._pca_worker.pca_done.connect(self._on_master_pca_computed)
         self._pca_worker.pca_error.connect(self._on_pca_error)
         self._pca_worker.pca_progress.connect(self._on_pca_progress)
         self._show_corr_progress()
         self._pca_worker.start()
 
     def _on_master_pca_computed(self, mean, components, explained,
-                                mean_low, components_low, cache_path):
-        """Store master arrays, cache to disk, then kick off cell adaptation."""
-        try:
-            save_kw = dict(mean=mean, components=components, explained=explained)
-            if mean_low is not None and components_low is not None:
-                save_kw['mean_low']       = mean_low
-                save_kw['components_low'] = components_low
-            np.savez_compressed(cache_path, **save_kw)
-        except Exception as exc:
-            print(f'[pca] master cache save error: {exc}')
+                                mean_low, components_low):
+        """Store master arrays (already cached to disk by PcaComputeWorker
+        itself), then kick off cell adaptation."""
         self._pca_master_mean            = mean
         self._pca_master_components      = components
         self._pca_master_mean_low        = mean_low
