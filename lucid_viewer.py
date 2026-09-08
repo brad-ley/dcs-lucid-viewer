@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QGroupBox, QGridLayout, QSpinBox, QFormLayout,
     QSplitter, QMessageBox, QSlider, QCheckBox, QSizePolicy,
     QDialog, QProgressBar, QDialogButtonBox, QFrame, QMenu,
+    QInputDialog,
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon
@@ -412,8 +413,19 @@ def _load_timestamps(path: str):
         # (the camera's frame counter, not a timestamp) matches that before
         # 'host_ns' is ever considered -- which would silently plot the frame
         # counter as if it were a time axis.
-        if has_header and 'host_ns' in header_row and 'framestamp' in header_row:
-            ns_idx = header_row.index('host_ns')
+        #
+        # The timeline itself is built from cam_sec/cam_usec, NOT host_ns:
+        # OrcaFireControl's own fps figure (MainWindow's captureCameraSpanSec())
+        # and its trigger time (FrameRecorder::markTriggerFrame(),
+        # trigger_time_corrected_sec in the sidecar) are both deliberately on
+        # the CAMERA's clock, specifically to avoid host_ns padding in
+        # dcamcap_start() startup latency and OS scheduling jitter. Building
+        # this viewer's timeline from host_ns instead would silently plot
+        # frames against a different clock than the one the trigger time and
+        # fps figure are quoted on -- close, but not the same instant.
+        if has_header and 'cam_sec' in header_row and 'cam_usec' in header_row and 'framestamp' in header_row:
+            sec_idx = header_row.index('cam_sec')
+            usec_idx = header_row.index('cam_usec')
 
             # trigger_status is OrcaFireControl's own trigger marker: a
             # plain 0/1 per frame, NOT a Lucid/Arena-style line_status_all
@@ -443,12 +455,13 @@ def _load_timestamps(path: str):
             else:
                 trig_idx = None
 
-            ns_vals = []
+            cam_vals = []
             trig_vals = []   # raw 0/1 per frame, expanded to an edge-only mask below
             for row in rows[1:]:
-                if ns_idx < len(row) and row[ns_idx].strip():
+                if (sec_idx < len(row) and usec_idx < len(row)
+                        and row[sec_idx].strip() and row[usec_idx].strip()):
                     try:
-                        ns_vals.append(float(row[ns_idx]))
+                        cam_vals.append(float(row[sec_idx]) + float(row[usec_idx]) / 1e6)
                     except ValueError:
                         continue
                     else:
@@ -459,8 +472,8 @@ def _load_timestamps(path: str):
                             except ValueError:
                                 trig_val = 0
                         trig_vals.append(trig_val)
-            if len(ns_vals) >= 2:
-                ts = (np.array(ns_vals, dtype=np.float64) - ns_vals[0]) * 1e-9  # -> seconds
+            if len(cam_vals) >= 2:
+                ts = np.array(cam_vals, dtype=np.float64) - cam_vals[0]  # -> seconds since frame 0
 
                 line_statuses = None
                 if trig_idx is not None and trig_vals:
@@ -2244,7 +2257,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
     # ── UI ────────────────────────────────────────────────────────────────────
     def _build_ui(self):
         file_menu = self.menuBar().addMenu('&File')
-        open_act = QAction('&Open file…', self)
+        open_act = QAction('&Open recording folder…', self)
         open_act.setShortcut(QKeySequence.StandardKey.Open)
         open_act.triggered.connect(self.open_file)
         file_menu.addAction(open_act)
@@ -2313,7 +2326,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         sb.setContentsMargins(8, 8, 8, 8)
         sb.setSpacing(8)
 
-        open_btn = QPushButton('Open image file…')
+        open_btn = QPushButton('Open recording folder…')
         open_btn.clicked.connect(self.open_file)
         sb.addWidget(open_btn)
 
@@ -2439,6 +2452,19 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.corr_status_lbl = QLabel('')
         self.corr_status_lbl.setWordWrap(True)
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+        # Indeterminate ("busy") bar shown only while a PcaComputeWorker/
+        # CellAdaptWorker is running (see _show_corr_progress()/
+        # _hide_corr_progress()) -- corr_status_lbl already gets the phase
+        # text (e.g. "PCA: normalizing components…") via pca_progress, but a
+        # small text label is easy to miss, and the PCA fit over many
+        # full-resolution frames can legitimately take a while. Without a
+        # visible "still working" indicator that looks identical to the app
+        # having hung.
+        self._corr_progress = QProgressBar()
+        self._corr_progress.setRange(0, 0)   # indeterminate
+        self._corr_progress.setTextVisible(False)
+        self._corr_progress.setFixedHeight(6)
+        self._corr_progress.setVisible(False)
         self.store_fields_btn = QPushButton('Store')
         self.store_fields_btn.setToolTip(
             'Save current dark/white field selection to this file\'s sidecar JSON.\n'
@@ -2458,7 +2484,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         corr_grid.addWidget(self.pca_n_spin,             3, 1)
         corr_grid.addWidget(self._pca_settings_btn,      4, 0, 1, 2)
         corr_grid.addWidget(self.corr_status_lbl,        5, 0, 1, 2)
-        corr_grid.addWidget(self.store_fields_btn,       6, 0, 1, 2)
+        corr_grid.addWidget(self._corr_progress,         6, 0, 1, 2)
+        corr_grid.addWidget(self.store_fields_btn,       7, 0, 1, 2)
         sb.addWidget(corr_box)
 
         sb.addStretch()
@@ -2541,17 +2568,57 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     # ── File loading ──────────────────────────────────────────────────────────
     def open_file(self):
+        # A folder picker, not a file picker -- every recording (OrcaFireControl
+        # or a Lucid calibration capture) writes exactly one stack file per run
+        # folder, alongside its _index.csv/.json sidecar. Every OTHER folder
+        # picker in this app (white/dark/PCA field folders) already works this
+        # way; making the user drill into the folder and pick the one file by
+        # name here was an inconsistency, not a real choice.
         last = self._settings.value('last_path', '')
         start_dir = os.path.dirname(last) if last else ''
-        path, _ = QFileDialog.getOpenFileName(
-            self, 'Open image file', start_dir,
-            'Image files (*.raw *.tiff *.tif *.mp4 *.avi);;All files (*)'
-        )
+        folder = QFileDialog.getExistingDirectory(
+            self, 'Select recording folder', start_dir)
+        if not folder:
+            return
+        path = self._resolve_recording_file(folder)
         if not path:
             return
         self._path = path
         self._apply_hints(path)
         self._open_reader()
+
+    def _resolve_recording_file(self, folder: str):
+        """Find the one recording stack file inside *folder*. Returns its full
+        path, or None (having already told the user why) if there is not
+        exactly one obvious candidate."""
+        exts = ('.raw', '.tiff', '.tif', '.mp4', '.avi')
+        try:
+            candidates = sorted(
+                f for f in os.listdir(folder)
+                if os.path.splitext(f)[1].lower() in exts
+            )
+        except OSError as exc:
+            QMessageBox.warning(self, 'Open error',
+                                f'Could not read {folder}:\n{exc}')
+            return None
+
+        if not candidates:
+            QMessageBox.warning(
+                self, 'Open error',
+                f'No recording file (.raw/.tiff/.mp4/.avi) found in:\n{folder}')
+            return None
+        if len(candidates) == 1:
+            return os.path.join(folder, candidates[0])
+
+        # More than one -- rare (a folder with leftover files from an old
+        # run), so ask rather than silently guessing which one was meant.
+        name, ok = QInputDialog.getItem(
+            self, 'Multiple recordings found',
+            f'{len(candidates)} recording files found in this folder -- pick one:',
+            candidates, 0, False)
+        if not ok:
+            return None
+        return os.path.join(folder, name)
 
     def _apply_hints(self, path: str):
         """Apply metadata from .json sidecar first, fall back to filename heuristics."""
@@ -2741,6 +2808,22 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 ts = self._timestamps
                 if ts is not None and trigger_idxs[0] < len(ts):
                     self._trigger_t0 = float(ts[trigger_idxs[0]])
+
+        # OrcaFireControl writes a calibrated trigger time straight into the
+        # sidecar (trigger_time_corrected_sec = the hardware-reported frame's
+        # camera-clock time plus a fixed, user-measured offset that absorbs
+        # the sub-frame jitter a frame-quantized reading can't resolve on its
+        # own -- see EpicsSettingsDialog::triggerOffsetSec() /
+        # FrameRecorder::writeTriggerMetadata() in that repo). Prefer it over
+        # the rising-edge frame found above: it is the same "seconds since
+        # frame 0" quantity (just measured on the camera clock rather than
+        # host_ns), corrected for jitter the CSV-only path knows nothing
+        # about.
+        corrected = self._sidecar.get('trigger_time_corrected_sec')
+        if corrected is not None and self._timestamps is not None:
+            unit_scale = {'ms': 1e3, 's': 1.0, 'min': 1.0 / 60.0}.get(self._ts_unit, 1.0)
+            self._trigger_t0 = float(corrected) * unit_scale
+
         self.frame_slider.set_triggers(self._trigger_frames)
 
         self._auto_levels_done = False
@@ -3591,11 +3674,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
         )
         self._pca_worker.pca_error.connect(self._on_pca_error)
         self._pca_worker.pca_progress.connect(self._on_pca_progress)
+        self._show_corr_progress()
         self._pca_worker.start()
 
     def _on_pca_computed(self, mean, components, explained, mean_low, components_low,
                          cache_path, folder):
         if self._white_mode != 'pca':
+            self._hide_corr_progress()
             return
         self._pca_mean              = mean
         self._pca_components        = components
@@ -3623,12 +3708,32 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.corr_status_lbl.setText(f'PCA ✓  {n_stored} comp, top 3: {ev_str}{blur_tag}')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
         self._set_white_field_info(folder)
-        self._refresh_current_frame()
-        self._auto_levels()
+        # _refresh_current_frame()/_auto_levels() apply the PCA correction to
+        # the on-screen frame synchronously, right here on the GUI thread --
+        # for a large sensor (the ATX245 default is 5328x4608) with blur mode
+        # on, that means an FFT-based Gaussian blur over 24+ megapixels before
+        # either call returns. The fit above was safely backgrounded, but this
+        # last step isn't, so a wait cursor keeps it from reading as a second,
+        # unexplained hang right as the status line says "PCA done."
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._refresh_current_frame()
+            self._auto_levels()
+        finally:
+            QApplication.restoreOverrideCursor()
+            self._hide_corr_progress()
 
     def _on_pca_progress(self, msg):
         self.corr_status_lbl.setText(msg)
         self.corr_status_lbl.setStyleSheet('color: #aaa; font-size: 10px;')
+
+    def _show_corr_progress(self):
+        """Call right before starting a PcaComputeWorker/CellAdaptWorker."""
+        self._corr_progress.setVisible(True)
+
+    def _hide_corr_progress(self):
+        """Call from every terminal slot (done or error) of those workers."""
+        self._corr_progress.setVisible(False)
 
     # ------------------------------------------------------------------ #
     # Universal PCA (cell-transform) methods                               #
@@ -3736,6 +3841,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         )
         self._pca_worker.pca_error.connect(self._on_pca_error)
         self._pca_worker.pca_progress.connect(self._on_pca_progress)
+        self._show_corr_progress()
         self._pca_worker.start()
 
     def _on_master_pca_computed(self, mean, components, explained,
@@ -3797,11 +3903,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._cell_adapt_worker.adapt_done.connect(
             lambda cm, eh, ml, ql, _f=folder: self._on_cell_adapted(cm, eh, ml, ql, _f))
         self._cell_adapt_worker.adapt_progress.connect(self._on_pca_progress)
+        self._show_corr_progress()
         self._cell_adapt_worker.start()
 
     def _on_cell_adapted(self, cell_mean, e_high_cell, mu_low_cell, q_low, folder):
         """Slot adapted eigenvectors into the projection pipeline."""
         if cell_mean is None:
+            self._hide_corr_progress()
             self.corr_status_lbl.setText('Cell adaptation failed — check console')
             self.corr_status_lbl.setStyleSheet('color: #c88; font-size: 10px;')
             return
@@ -3831,8 +3939,16 @@ class LucidViewer(ViewerMixin, QMainWindow):
         else:
             extra_tip = ''
         self._set_white_field_info(folder, extra_tip)
-        self._refresh_current_frame()
-        self._auto_levels()
+        # See the matching comment in _on_pca_computed(): this applies the
+        # correction to the on-screen frame synchronously and can take real
+        # time at full sensor resolution with blur mode on.
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._refresh_current_frame()
+            self._auto_levels()
+        finally:
+            QApplication.restoreOverrideCursor()
+            self._hide_corr_progress()
 
     def _open_pca_settings(self):
         dlg = _PcaSettingsDialog(
@@ -3932,6 +4048,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         dlg.exec()
 
     def _on_pca_error(self, msg):
+        self._hide_corr_progress()
         self.corr_status_lbl.setText(f'PCA error: {msg}')
         self.corr_status_lbl.setStyleSheet('color: #ff6b6b; font-size: 10px;')
         self.statusBar().clearMessage()
