@@ -111,4 +111,9 @@ QMenu::item:selected { background: #3c3f41; }
 QStatusBar { color: #aaaaaa; font-size: 11px; }
 QSplitter::handle { background: #444; }
 QMessageBox { background: #2b2b2b; }
+QHeaderView::section {
+    background: #3c3f41; color: #dddddd; border: 1px solid #555; padding: 4px; }
+QTableWidget {
+    background: #2b2b2b; color: #dddddd; gridline-color: #444;
+    selection-background-color: #3c5a7a; selection-color: #ffffff; }
 """

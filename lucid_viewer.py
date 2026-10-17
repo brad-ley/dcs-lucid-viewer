@@ -1115,6 +1115,150 @@ class TiffExportWorker(QThread):
             self.export_error.emit(str(exc))
 
 
+class AverageExportWorker(QThread):
+    """Writes the mean over every frame of the currently loaded stack as a
+    SINGLE-page TIFF. Whatever dark/white/PCA correction is active is applied
+    PER FRAME before accumulating (so the result is the mean of physically
+    meaningful transmission values, not an average of differently-scaled
+    per-frame codes), then the accumulated mean is rescaled to uint16 ONCE at
+    the end -- same min/max-to-code_max convention as TiffExportWorker's own
+    per-frame _correct(), just applied once instead of n times. Reads every
+    frame, so (like TiffExportWorker) this runs off the GUI thread."""
+    progress     = pyqtSignal(int, int)  # frames_done, total
+    export_done  = pyqtSignal(str)
+    export_error = pyqtSignal(str)
+
+    def __init__(self, out_path, reader, cache, n, pixel_bits,
+                 dark_field, dark_field_gain,
+                 white_field, white_field_gain,
+                 gains, desc,
+                 pca_mean=None, pca_components=None, pca_n_components=5,
+                 pca_mean_low=None, pca_components_low=None,
+                 pca_blur_enabled=False, pca_blur_sigma=400,
+                 pca_cell_gain=None):
+        super().__init__()
+        self._out_path            = out_path
+        self._reader              = reader
+        self._cache                = dict(cache)
+        self._n                   = n
+        self._pixel_bits          = pixel_bits
+        self._dark_field          = dark_field
+        self._dark_field_gain     = dark_field_gain
+        self._white_field         = white_field
+        self._white_field_gain    = white_field_gain
+        self._gains               = gains
+        self._desc                = desc
+        self._pca_mean            = pca_mean
+        self._pca_components      = pca_components
+        self._pca_n_components    = pca_n_components
+        self._pca_mean_low        = pca_mean_low
+        self._pca_components_low  = pca_components_low
+        self._pca_blur_enabled    = pca_blur_enabled
+        self._pca_blur_sigma      = pca_blur_sigma
+        self._pca_cell_gain       = pca_cell_gain
+        self._cancelled           = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    # Identical to TiffExportWorker._corrected_float()/GifExportWorker's own
+    # copy -- see TiffExportWorker's version for the per-step reasoning.
+    def _corrected_float(self, frame, data_gain):
+        if self._pca_mean is not None and self._pca_components is not None:
+            mu   = self._pca_mean
+            comp = self._pca_components
+            n    = min(self._pca_n_components, comp.shape[0])
+            f = frame.astype(np.float32)
+            dark = self._dark_field
+            if dark is not None and data_gain is not None and self._dark_field_gain is not None:
+                dark = dark * np.float32(10 ** ((data_gain - self._dark_field_gain) / 20.0))
+            if dark is not None:
+                f = f - dark
+            if (data_gain is not None and self._pca_cell_gain is not None
+                    and data_gain != self._pca_cell_gain):
+                gain_scale = np.float32(10 ** ((data_gain - self._pca_cell_gain) / 20.0))
+                mu = mu * gain_scale
+            else:
+                gain_scale = None
+            if (self._pca_blur_enabled
+                    and self._pca_mean_low is not None
+                    and self._pca_components_low is not None):
+                n_low  = min(n, self._pca_components_low.shape[0])
+                mu_low = (self._pca_mean_low * gain_scale
+                          if gain_scale is not None else self._pca_mean_low)
+                f_low  = _blur_and_bin(f, self._pca_blur_sigma, mu_low.shape[0])
+                d_low  = f_low - mu_low
+                coeffs = self._pca_components_low[:n_low] @ d_low
+                bg     = (mu + comp[:n_low].T @ coeffs).reshape(frame.shape)
+            else:
+                d_c    = f.ravel() - mu
+                coeffs = comp[:n] @ d_c
+                bg     = (mu + comp[:n].T @ coeffs).reshape(frame.shape)
+            bg = np.where(bg >= np.float32(1.0), bg, np.float32(1.0))
+            return (f / bg).astype(np.float32)
+        return _field_correct_float(
+            frame, self._dark_field, self._white_field,
+            self._dark_field_gain, self._white_field_gain, data_gain,
+        )
+
+    def run(self):
+        try:
+            import tifffile
+            n = self._n
+            acc = None
+            any_corrected = False
+            for i in range(n):
+                if self._cancelled:
+                    self.export_error.emit('Export cancelled.')
+                    return
+                frame = self._cache[i] if i in self._cache else self._reader[i]
+                data_gain = (self._gains[i]
+                             if self._gains is not None and i < len(self._gains)
+                             else None)
+                corrected = self._corrected_float(frame, data_gain)
+                contrib = (corrected if corrected is not None
+                          else frame).astype(np.float64)
+                if corrected is not None:
+                    any_corrected = True
+                acc = contrib if acc is None else acc + contrib
+                self.progress.emit(i + 1, n)
+
+            mean = acc / n
+            meta = json.loads(self._desc) if self._desc else {}
+
+            if any_corrected:
+                code_max = np.float32((1 << self._pixel_bits) - 1)
+                fmin = float(mean.min())
+                fmax = float(mean.max())
+                if not np.isfinite(fmin) or not np.isfinite(fmax) or fmax <= fmin:
+                    # Flat result: same "store zeros, unit range" convention
+                    # as TiffExportWorker._correct() uses per frame.
+                    out  = np.zeros(mean.shape, dtype=np.uint16)
+                    fmax = fmin + 1.0
+                else:
+                    span = np.float32(fmax - fmin)
+                    out = np.clip((mean - np.float32(fmin)) / span * code_max,
+                                 0, code_max).astype(np.uint16)
+                meta['transmission_min'] = round(fmin, 8)
+                meta['transmission_max'] = round(fmax, 8)
+                meta['code_max']         = int(code_max)
+                meta['decode'] = ('transmission = code / code_max * '
+                                  '(transmission_max - transmission_min) + transmission_min')
+            else:
+                # No correction active: this is a plain mean of raw sensor
+                # counts, same semantics as OrcaFireControl's own white/dark/
+                # ambient calibration mean -- no min/max rescale needed, just
+                # round and clip back into the pixel format's own range.
+                code_max = (1 << self._pixel_bits) - 1
+                out = np.clip(np.round(mean), 0, code_max).astype(np.uint16)
+
+            tifffile.imwrite(self._out_path, out, description=json.dumps(meta, indent=2))
+            self.export_done.emit(
+                f'Exported average of {n} frames → {os.path.basename(self._out_path)}')
+        except Exception as exc:
+            self.export_error.emit(str(exc))
+
+
 class GifExportWorker(QThread):
     progress     = pyqtSignal(int, int)   # frames_done, total
     export_done  = pyqtSignal(str)
@@ -2286,6 +2430,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._roi_user_set      = False
         self._export_worker      = None   # TiffExportWorker while an export is running
         self._gif_worker         = None   # GifExportWorker while a GIF export is running
+        self._avg_export_worker = None    # AverageExportWorker while an average-frame export is running
         self._export_compression = 'None'
         self._export_imagej      = False
         self._dark_field        = None   # float32 (H, W) averaged dark frame, or None
@@ -2346,6 +2491,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._export_act.setEnabled(False)
         self._export_act.triggered.connect(self._export_tiff)
         file_menu.addAction(self._export_act)
+        self._export_frame_act = QAction('Export Current &Frame…', self)
+        self._export_frame_act.setEnabled(False)
+        self._export_frame_act.triggered.connect(self._export_current_frame)
+        file_menu.addAction(self._export_frame_act)
+        self._export_avg_act = QAction('Export &Average Frame…', self)
+        self._export_avg_act.setEnabled(False)
+        self._export_avg_act.triggered.connect(self._export_average_frame)
+        file_menu.addAction(self._export_avg_act)
         self._export_gif_act = QAction('Export &GIF…', self)
         self._export_gif_act.setShortcut(QKeySequence('Ctrl+G'))
         self._export_gif_act.setEnabled(False)
@@ -2696,7 +2849,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
         # picker in this app (white/dark/PCA field folders) already works this
         # way; making the user drill into the folder and pick the one file by
         # name here was an inconsistency, not a real choice.
-        last = self._settings.value('last_path', '')
+        # self._path first: the persisted 'last_path' setting is only ever
+        # written at app close (_save_settings()), so within a single running
+        # session it still points at whatever was open the PREVIOUS time the
+        # app was launched -- not the file this session already has open,
+        # which is what "parent of the currently selected folder" actually
+        # means to a user mid-session. Falls back to the persisted value only
+        # when nothing has been opened yet this session.
+        last = self._path or self._settings.value('last_path', '')
         folder = QFileDialog.getExistingDirectory(
             self, 'Select recording folder', self._parent_dir_of(last))
         if not folder:
@@ -2985,6 +3145,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         self.reload_btn.setEnabled(True)
         self._export_act.setEnabled(True)
+        self._export_frame_act.setEnabled(True)
+        self._export_avg_act.setEnabled(True)
         self._export_gif_act.setEnabled(True)
 
         self._stop_play()
@@ -4681,6 +4843,76 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 self._open_reader()
 
     # ── TIFF export ───────────────────────────────────────────────────────────
+    def _correction_suffix(self) -> str:
+        """Filename suffix describing whatever dark/white/PCA correction is
+        currently active -- shared by the stack, single-frame, and average-
+        frame exporters so a file's name always says what's baked into it."""
+        if self._white_mode == 'pca' and self._pca_components is not None:
+            return '_dark_pca' if self._dark_field is not None else '_pca'
+        if self._dark_field is not None and self._white_field is not None:
+            return '_dark_white'
+        if self._dark_field is not None:
+            return '_dark'
+        if self._white_field is not None:
+            return '_white'
+        return ''
+
+    def _correction_metadata(self) -> dict:
+        """The 'correction' block embedded in every exporter's description
+        JSON -- which field(s) were applied and the formula used. Shared by
+        the stack, single-frame, and average-frame exporters so a file is
+        self-describing regardless of which export action produced it."""
+        correction = {}
+        if self._dark_field is not None:
+            dark_folder = self._find_field_folder('dark_field')
+            correction['dark_field'] = os.path.basename(dark_folder) if dark_folder else 'loaded'
+            if self._dark_field_gain is not None:
+                correction['dark_field_gain_dB'] = self._dark_field_gain
+        if self._white_mode == 'pca' and self._pca_components is not None:
+            correction['white_field_mode'] = 'pca'
+            correction['pca_n_components'] = self._pca_n_components
+            if self._pca_folder:
+                correction['pca_folder'] = os.path.basename(self._pca_folder)
+            correction['formula'] = 'transmission = data / pca_background'
+        elif self._white_field is not None:
+            white_folder = self._find_field_folder('white_field')
+            correction['white_field'] = os.path.basename(white_folder) if white_folder else 'loaded'
+            if self._white_field_gain is not None:
+                correction['white_field_gain_dB'] = self._white_field_gain
+        if correction and 'formula' not in correction:
+            correction['formula'] = (
+                'transmission = (data - dark) / (white - dark)'
+                if self._dark_field is not None and self._white_field is not None
+                else 'corrected = data - dark' if self._dark_field is not None
+                else 'transmission = data / white'
+            )
+        return correction
+
+    @staticmethod
+    def _encode_frame_for_export(display_frame: np.ndarray, pixel_bits: int):
+        """Map a frame already run through _apply_field_correction() to the
+        on-disk uint16 encoding the stack exporter (TiffExportWorker._correct())
+        uses for corrected frames: a RAW frame (still its original integer
+        dtype -- correction wasn't active) passes through unchanged; a
+        CORRECTED frame (float32 transmission) gets rescaled by THIS frame's
+        own min/max to [0, code_max] so it round-trips through a 16-bit TIFF.
+        Returns (encoded, fmin, fmax) -- fmin/fmax are None for a raw frame,
+        since there's no per-frame mapping to decode.
+        """
+        if display_frame.dtype != np.float32:
+            return display_frame, None, None
+        code_max = np.float32((1 << pixel_bits) - 1)
+        fmin = float(display_frame.min())
+        fmax = float(display_frame.max())
+        if not np.isfinite(fmin) or not np.isfinite(fmax) or fmax <= fmin:
+            # Flat frame: nothing to scale -- store zeros and a unit range so
+            # the decode formula stays well-defined (transmission ≈ fmin
+            # everywhere), same convention as TiffExportWorker._correct().
+            return np.zeros(display_frame.shape, dtype=np.uint16), fmin, fmin + 1.0
+        span = np.float32(fmax - fmin)
+        mapped = (display_frame - np.float32(fmin)) / span * code_max
+        return np.clip(mapped, 0, code_max).astype(np.uint16), fmin, fmax
+
     def _export_tiff(self):
         if self._reader is None:
             return
@@ -4694,19 +4926,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         base = os.path.splitext(self._path)[0] if self._path else ''
         cmp  = self._export_compression
-        if self._white_mode == 'pca' and self._pca_components is not None:
-            if self._dark_field is not None:
-                field_suffix = '_dark_pca'
-            else:
-                field_suffix = '_pca'
-        elif self._dark_field is not None and self._white_field is not None:
-            field_suffix = '_dark_white'
-        elif self._dark_field is not None:
-            field_suffix = '_dark'
-        elif self._white_field is not None:
-            field_suffix = '_white'
-        else:
-            field_suffix = ''
+        field_suffix = self._correction_suffix()
         cmp_suffix = f'_{cmp.lower()}' if cmp != 'None' else ''
         out_path, _ = QFileDialog.getSaveFileName(
             self, 'Export TIFF stack', base + field_suffix + cmp_suffix + '.tiff',
@@ -4747,30 +4967,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if self._line_statuses is not None:
             meta['line_status_all']   = self._line_statuses.tolist()
 
-        correction = {}
-        if self._dark_field is not None:
-            dark_folder = self._find_field_folder('dark_field')
-            correction['dark_field'] = os.path.basename(dark_folder) if dark_folder else 'loaded'
-            if self._dark_field_gain is not None:
-                correction['dark_field_gain_dB'] = self._dark_field_gain
-        if self._white_mode == 'pca' and self._pca_components is not None:
-            correction['white_field_mode'] = 'pca'
-            correction['pca_n_components'] = self._pca_n_components
-            if self._pca_folder:
-                correction['pca_folder'] = os.path.basename(self._pca_folder)
-            correction['formula'] = 'transmission = data / pca_background'
-        elif self._white_field is not None:
-            white_folder = self._find_field_folder('white_field')
-            correction['white_field'] = os.path.basename(white_folder) if white_folder else 'loaded'
-            if self._white_field_gain is not None:
-                correction['white_field_gain_dB'] = self._white_field_gain
-        if correction and 'formula' not in correction:
-            correction['formula'] = (
-                'transmission = (data - dark) / (white - dark)'
-                if self._dark_field is not None and self._white_field is not None
-                else 'corrected = data - dark' if self._dark_field is not None
-                else 'transmission = data / white'
-            )
+        correction = self._correction_metadata()
         if correction:
             meta['correction'] = correction
 
@@ -4830,12 +5027,16 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         def on_finished(msg):
             self._export_act.setEnabled(True)
+            self._export_frame_act.setEnabled(True)
+            self._export_avg_act.setEnabled(True)
             self._export_gif_act.setEnabled(True)
             self.statusBar().showMessage(msg)
             dlg.close()
 
         def on_error(msg):
             self._export_act.setEnabled(True)
+            self._export_frame_act.setEnabled(True)
+            self._export_avg_act.setEnabled(True)
             self._export_gif_act.setEnabled(True)
             if msg != 'Export cancelled.':
                 QMessageBox.warning(self, 'Export error', msg)
@@ -4853,8 +5054,173 @@ class LucidViewer(ViewerMixin, QMainWindow):
         worker.finished.connect(worker.deleteLater)
 
         self._export_act.setEnabled(False)
+        self._export_frame_act.setEnabled(False)
+        self._export_avg_act.setEnabled(False)
         self._export_gif_act.setEnabled(False)
         self.statusBar().showMessage(f'Exporting {n} frames…')
+        worker.start()
+        dlg.show()
+
+    def _export_current_frame(self):
+        """File → Export Current Frame…: just the frame on screen right now,
+        with whatever dark/white/PCA correction is currently active applied
+        the same way it is for display -- fast enough to run synchronously,
+        no worker thread/progress dialog needed."""
+        if self._reader is None:
+            return
+        try:
+            import tifffile
+        except ImportError:
+            QMessageBox.warning(self, 'Missing dependency',
+                                'tifffile is required for TIFF export.\n'
+                                'Install it with:  pip install tifffile')
+            return
+
+        idx = self.frame_slider.value()
+        frame = self._cache[idx] if idx in self._cache else self._reader[idx]
+        data_gain = (self._gains[idx] if self._gains is not None and idx < len(self._gains)
+                     else None)
+        display_frame = self._apply_field_correction(frame, data_gain=data_gain)
+        pixel_bits = _FORMAT_BITS.get(self.fmt_combo.currentText(), 16)
+        out, fmin, fmax = self._encode_frame_for_export(display_frame, pixel_bits)
+
+        base = os.path.splitext(self._path)[0] if self._path else ''
+        out_path, _ = QFileDialog.getSaveFileName(
+            self, 'Export current frame',
+            f'{base}_frame{idx + 1}{self._correction_suffix()}.tiff',
+            'TIFF files (*.tiff *.tif);;All files (*)'
+        )
+        if not out_path:
+            return
+
+        meta = {
+            'source_file':  os.path.basename(self._path) if self._path else '',
+            'frame_index':  idx,
+            'pixel_format': self.fmt_combo.currentText(),
+            'width':        self.w_spin.value(),
+            'height':       self.h_spin.value(),
+        }
+        ts = self._timestamps
+        if ts is not None and idx < len(ts):
+            meta[f'timestamp_{self._ts_unit}'] = round(float(ts[idx]), 6)
+            if self._trigger_t0 is not None:
+                meta[f't_trigger_{self._ts_unit}'] = round(float(ts[idx] - self._trigger_t0), 6)
+        correction = self._correction_metadata()
+        if correction:
+            meta['correction'] = correction
+        if fmin is not None:
+            meta['transmission_min'] = round(fmin, 8)
+            meta['transmission_max'] = round(fmax, 8)
+            meta['code_max']         = int((1 << pixel_bits) - 1)
+            meta['decode'] = ('transmission = code / code_max * '
+                              '(transmission_max - transmission_min) + transmission_min')
+
+        try:
+            tifffile.imwrite(out_path, out, description=json.dumps(meta, indent=2))
+        except Exception as exc:
+            QMessageBox.warning(self, 'Export error', str(exc))
+            return
+        self.statusBar().showMessage(
+            f'Exported frame {idx + 1} / {self._reader_len()} → {os.path.basename(out_path)}')
+
+    def _export_average_frame(self):
+        """File → Export Average Frame…: the mean over every frame in the
+        currently loaded stack, with whatever correction is active applied
+        PER FRAME before averaging (so it's the mean transmission, not the
+        average of raw counts, whenever a dark/white/PCA field is loaded) --
+        then rescaled to uint16 ONCE for the averaged result, same convention
+        as a single corrected frame. Reads the whole stack, so it runs on a
+        background thread with a progress dialog, same as the stack export."""
+        if self._reader is None:
+            return
+        try:
+            import tifffile  # noqa: F401 — check availability before dialog
+        except ImportError:
+            QMessageBox.warning(self, 'Missing dependency',
+                                'tifffile is required for TIFF export.\n'
+                                'Install it with:  pip install tifffile')
+            return
+
+        n = self._reader_len()
+        base = os.path.splitext(self._path)[0] if self._path else ''
+        out_path, _ = QFileDialog.getSaveFileName(
+            self, 'Export average frame',
+            f'{base}_mean{self._correction_suffix()}.tiff',
+            'TIFF files (*.tiff *.tif);;All files (*)'
+        )
+        if not out_path:
+            return
+
+        meta = {
+            'source_file':  os.path.basename(self._path) if self._path else '',
+            'pixel_format': self.fmt_combo.currentText(),
+            'width':        self.w_spin.value(),
+            'height':       self.h_spin.value(),
+            'n_frames_averaged': n,
+        }
+        correction = self._correction_metadata()
+        if correction:
+            meta['correction'] = correction
+        desc = json.dumps(meta)
+
+        pca_mean     = self._pca_mean       if self._white_mode == 'pca' else None
+        pca_comp     = self._pca_components if self._white_mode == 'pca' else None
+        pca_mean_low = self._pca_mean_low       if self._white_mode == 'pca' else None
+        pca_comp_low = self._pca_components_low if self._white_mode == 'pca' else None
+        worker = AverageExportWorker(
+            out_path, self._reader, self._cache, n,
+            _FORMAT_BITS.get(self.fmt_combo.currentText(), 16),
+            self._dark_field, self._dark_field_gain,
+            self._white_field if self._white_mode == 'flat' else None,
+            self._white_field_gain,
+            self._gains, desc,
+            pca_mean=pca_mean, pca_components=pca_comp,
+            pca_n_components=self._pca_n_components,
+            pca_mean_low=pca_mean_low, pca_components_low=pca_comp_low,
+            pca_blur_enabled=self._pca_blur_enabled,
+            pca_blur_sigma=self._pca_blur_sigma,
+            pca_cell_gain=self._pca_cell_gain,
+        )
+        self._avg_export_worker = worker
+
+        dlg = _ExportProgressDialog(n, parent=self, stylesheet=_DARK_STYLE)
+        dlg.setWindowTitle('Exporting average frame…')
+        dlg.set_phase('Averaging')
+        dlg.cancel_requested.connect(worker.cancel)
+
+        export_actions = (self._export_act, self._export_gif_act,
+                          self._export_frame_act, self._export_avg_act)
+
+        def on_progress(done, total):
+            self.statusBar().showMessage(f'Averaging frame {done} / {total}…')
+            dlg.update_progress(done, total)
+
+        def on_finished(msg):
+            for act in export_actions:
+                act.setEnabled(True)
+            self.statusBar().showMessage(msg)
+            dlg.close()
+
+        def on_error(msg):
+            for act in export_actions:
+                act.setEnabled(True)
+            if msg != 'Export cancelled.':
+                QMessageBox.warning(self, 'Export error', msg)
+            self.statusBar().showMessage(msg)
+            dlg.close()
+
+        def on_worker_done():
+            self._avg_export_worker = None
+
+        worker.progress.connect(on_progress)
+        worker.export_done.connect(on_finished)
+        worker.export_error.connect(on_error)
+        worker.finished.connect(on_worker_done)
+        worker.finished.connect(worker.deleteLater)
+
+        for act in export_actions:
+            act.setEnabled(False)
+        self.statusBar().showMessage(f'Averaging {n} frames…')
         worker.start()
         dlg.show()
 
@@ -4925,12 +5291,16 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         def on_finished(msg):
             self._export_act.setEnabled(True)
+            self._export_frame_act.setEnabled(True)
+            self._export_avg_act.setEnabled(True)
             self._export_gif_act.setEnabled(True)
             self.statusBar().showMessage(msg)
             prog_dlg.close()
 
         def on_error(msg):
             self._export_act.setEnabled(True)
+            self._export_frame_act.setEnabled(True)
+            self._export_avg_act.setEnabled(True)
             self._export_gif_act.setEnabled(True)
             if msg != 'GIF export cancelled.':
                 QMessageBox.warning(self, 'GIF export error', msg)
@@ -4947,6 +5317,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         worker.finished.connect(worker.deleteLater)
 
         self._export_act.setEnabled(False)
+        self._export_frame_act.setEnabled(False)
+        self._export_avg_act.setEnabled(False)
         self._export_gif_act.setEnabled(False)
         self.statusBar().showMessage(f'Exporting GIF ({(n + step - 1) // step} frames)…')
         worker.start()
