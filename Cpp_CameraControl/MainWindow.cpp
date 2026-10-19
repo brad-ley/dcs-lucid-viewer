@@ -563,6 +563,25 @@ void MainWindow::buildUI() {
     pollTimer->start(500);
   });
 
+  QAction *revealFolderAction =
+      toolsMenu->addAction("Reveal Output Folder in Explorer");
+  revealFolderAction->setToolTip(
+      "Open the folder currently entered in the output path field above.");
+  connect(revealFolderAction, &QAction::triggered, this, [this]() {
+    const QString path = m_outputPathEdit->text().trimmed();
+    if (path.isEmpty()) {
+      QMessageBox::information(this, "Reveal in File Explorer",
+                               "No output folder is set yet.");
+      return;
+    }
+    if (!QDir(path).exists()) {
+      QMessageBox::warning(this, "Reveal in File Explorer",
+                           "Folder not found:\n" + path);
+      return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+  });
+
   QAction *scopeControlAction = toolsMenu->addAction("Scope Control Software");
   connect(scopeControlAction, &QAction::triggered, [this]() {
     // Refocus if the window is already open.
