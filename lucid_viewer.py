@@ -2332,6 +2332,193 @@ class _PcaEigenvectorDialog(QDialog):
         QMessageBox.warning(self, 'Temporal weights error', msg)
 
 
+# ── FFT / spatial-frequency dialog ──────────────────────────────────────────────
+
+# Native sensor pixel pitch for each camera this viewer opens recordings from.
+# Combined with the microscope objective magnification (written into the
+# sidecar's "objective_magnification" field by the acquisition app), this
+# gives the pixel size at the sample plane: pitch / magnification.
+#   ORCA-Fire: datasheet 4.6 um pixels, 20.4 mm x 10.9 mm FOV.
+#   LucidLabs (Arena SDK camera): datasheet 2.74 um (H) x 2.74 um (V) pixels;
+#   the reported 19.3 mm sensor size is the diagonal (the sensor isn't square).
+_ORCAFIRE_PIXEL_UM = 4.6
+_LUCID_PIXEL_UM    = 2.74
+
+
+class _FFTDialog(QDialog):
+    """Non-modal dialog: pick a rectangular FOV on the current frame and inspect
+    its 2D FFT power spectrum, to help find the dominant spatial-frequency band
+    of a structure (e.g. electrochemical growth) as it evolves. If the
+    recording's objective magnification is known, spatial frequency is shown
+    in real units (cycles/um); otherwise it falls back to cycles/pixel."""
+
+    def __init__(self, frame, pixel_size_um=None, sensor_pixel_um=None,
+                 parent=None, stylesheet=''):
+        super().__init__(parent)
+        self.setWindowTitle('Spatial Frequency (FFT) Viewer')
+        self.setMinimumSize(760, 760)
+        if stylesheet:
+            self.setStyleSheet(stylesheet)
+
+        self._frame = np.asarray(frame)
+        self._pixel_size_um = pixel_size_um
+        # Scale factor applied to cycles/pixel to get the displayed unit.
+        self._freq_scale  = (1.0 / pixel_size_um) if pixel_size_um else 1.0
+        self._freq_unit   = 'cycles/µm' if pixel_size_um else 'cycles/px'
+        self._period_unit = 'µm' if pixel_size_um else 'px'
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(6)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        if pixel_size_um:
+            calib_text = (
+                f'Calibrated: {sensor_pixel_um} µm sensor pixel size → '
+                f'{pixel_size_um:.4f} µm/px at the sample.')
+        elif sensor_pixel_um:
+            calib_text = (
+                "No objective magnification in this recording's metadata -- "
+                'showing cycles/pixel. Set Camera → Microscope Objective (or '
+                'Config → Microscope Objective) in the acquisition app for '
+                'real spatial-frequency units.')
+        else:
+            calib_text = (
+                "Camera not recognized from this recording's metadata -- "
+                'showing cycles/pixel.')
+        layout.addWidget(QLabel(calib_text))
+
+        # ── source image with draggable/resizable FOV ROI ──────────────────────
+        layout.addWidget(QLabel('Drag/resize the ROI to pick the FOV, then Compute FFT.'))
+        self._src_view = pg.ImageView()
+        self._src_view.ui.roiBtn.hide()
+        self._src_view.ui.menuBtn.hide()
+        self._src_view.setMinimumHeight(200)
+        layout.addWidget(self._src_view)
+
+        h, w = self._frame.shape[:2]
+        self._roi = pg.RectROI([w * 0.25, h * 0.25], [w * 0.5, h * 0.5],
+                                pen=pg.mkPen('#4fc3f7', width=2))
+        self._roi.addScaleHandle([1, 1], [0, 0])
+        self._src_view.getView().addItem(self._roi)
+
+        # ── options / action row ─────────────────────────────────────────────────
+        opt_row = QHBoxLayout()
+        self._window_chk = QCheckBox('Apply Hann window (reduce edge artifacts)')
+        self._window_chk.setChecked(True)
+        opt_row.addWidget(self._window_chk)
+        opt_row.addStretch()
+        self._compute_btn = QPushButton('Compute FFT')
+        opt_row.addWidget(self._compute_btn)
+        layout.addLayout(opt_row)
+
+        # ── FFT power spectrum / radial profile, split by a draggable handle ────
+        layout.addWidget(QLabel('Log-power spectrum (centered, 2–98% contrast):'))
+        self._fft_view = pg.ImageView()
+        self._fft_view.ui.roiBtn.hide()
+        self._fft_view.ui.menuBtn.hide()
+        self._fft_view.setMinimumHeight(100)
+
+        self._radial_plot = pg.PlotWidget()
+        self._radial_plot.setLabel('left', 'Mean log-power')
+        self._radial_plot.setLabel('bottom', f'Spatial frequency ({self._freq_unit})')
+        self._radial_plot.setMinimumHeight(100)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(self._fft_view)
+        splitter.addWidget(self._radial_plot)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        layout.addWidget(splitter, 1)
+
+        # Draggable cutoff marker. The raw peak of the radial profile is almost
+        # always pinned at/near DC, so auto-reporting "the dominant frequency"
+        # isn't useful -- instead let the user drag this line to wherever they
+        # judge the real feature band ends, and read its value off live.
+        self._nyquist = 0.5 * self._freq_scale
+        self._cutoff_line = pg.InfiniteLine(
+            pos=0.1 * self._nyquist, angle=90, movable=True,
+            pen=pg.mkPen('#ffb74d', width=2))
+        self._cutoff_line.setBounds([0, self._nyquist])
+        self._radial_plot.addItem(self._cutoff_line)
+        self._cutoff_line.sigPositionChanged.connect(self._update_cutoff_label)
+
+        self._roi_lbl    = QLabel('')
+        self._cutoff_lbl = QLabel('')
+        layout.addWidget(self._roi_lbl)
+        layout.addWidget(self._cutoff_lbl)
+
+        close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_box.rejected.connect(self.reject)
+        layout.addWidget(close_box)
+
+        self._compute_btn.clicked.connect(self._compute_fft)
+        self._roi.sigRegionChangeFinished.connect(self._compute_fft)
+
+        self._src_view.setImage(self._frame, autoHistogramRange=True)
+        self._compute_fft()
+
+    # ── FFT computation ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _pct_levels(img, lo=2, hi=98):
+        """Return (vmin, vmax) at the given percentiles for display."""
+        flat = img.ravel()
+        return (float(np.percentile(flat, lo)), float(np.percentile(flat, hi)))
+
+    def _roi_subimage(self):
+        return self._roi.getArrayRegion(self._frame, self._src_view.imageItem)
+
+    def _compute_fft(self):
+        sub = self._roi_subimage()
+        if sub is None or sub.size == 0 or min(sub.shape[:2]) < 4:
+            self._roi_lbl.setText('ROI too small for FFT.')
+            return
+        sub = sub.astype(np.float64)
+        h, w = sub.shape[:2]
+
+        if self._window_chk.isChecked():
+            win = np.outer(np.hanning(h), np.hanning(w))
+            sub = sub * win
+
+        sub = sub - sub.mean()
+        spectrum  = np.fft.fftshift(np.fft.fft2(sub))
+        power     = np.abs(spectrum) ** 2
+        log_power = np.log1p(power)
+        levels = self._pct_levels(log_power, 2, 98)
+        self._fft_view.setImage(log_power, levels=levels, autoHistogramRange=False)
+
+        # Azimuthal average of the power spectrum vs. spatial frequency
+        # (computed in cycles/pixel, Nyquist = 0.5, then rescaled for display).
+        cy, cx = h / 2.0, w / 2.0
+        yy, xx = np.indices((h, w))
+        r = np.sqrt(((yy - cy) / h) ** 2 + ((xx - cx) / w) ** 2)
+
+        n_bins = max(min(h, w) // 2, 8)
+        bin_edges = np.linspace(0, min(0.5, r.max()), n_bins + 1)
+        bin_idx = np.clip(np.digitize(r.ravel(), bin_edges) - 1, 0, n_bins - 1)
+        sums    = np.bincount(bin_idx, weights=power.ravel(), minlength=n_bins)
+        counts  = np.bincount(bin_idx, minlength=n_bins)
+        radial_profile = np.divide(sums, counts, out=np.zeros_like(sums),
+                                    where=counts > 0)
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:]) * self._freq_scale
+
+        # Skip the DC bin (index 0), which dwarfs everything else.
+        self._radial_plot.clear()
+        self._radial_plot.addItem(self._cutoff_line)
+        self._radial_plot.plot(bin_centers[1:], np.log1p(radial_profile[1:]),
+                                pen=pg.mkPen('#4fc3f7', width=2))
+
+        self._roi_lbl.setText(f'ROI {w}×{h} px')
+        self._update_cutoff_label()
+
+    def _update_cutoff_label(self):
+        freq = self._cutoff_line.value()
+        period = (1.0 / freq) if freq > 0 else float('inf')
+        self._cutoff_lbl.setText(
+            f'Cutoff (drag the line): {freq:.4f} {self._freq_unit}  '
+            f'(~{period:.2f} {self._period_unit} period)')
+
+
 # ── Trigger-aware slider ──────────────────────────────────────────────────────
 
 class TriggerSlider(QSlider):
@@ -2449,6 +2636,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._sidecar           = {}   # Full parsed sidecar dict -- see _apply_hints()
         self._sidecar_acq_time  = ''
         self._sidecar_notes     = ''
+        self._sidecar_objective = None
+        self._sidecar_pixel_pitch_um = None
         self._timestamps        = None   # 1-D float64, relative, display units
         self._ts_unit           = ''
         self._gains             = None   # 1-D float64, per-frame gain dB (from frame_data.csv)
@@ -2563,11 +2752,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         trigger_settings_act.triggered.connect(self._open_trigger_settings)
         config_menu.addAction(trigger_settings_act)
 
-        # tools_menu = self.menuBar().addMenu('&Tools')
-        # viewer_act = QAction('&Viewer', self)
-        # viewer_act.setStatusTip('Launch Lucid Viewer (lucid_viewer.bat)')
-        # viewer_act.triggered.connect(self._launch_viewer)
-        # tools_menu.addAction(viewer_act)
+        tools_menu = self.menuBar().addMenu('&Tools')
+        fft_act = QAction('&FFT (spatial frequency)…', self)
+        fft_act.setStatusTip('Pick a FOV on the current frame and view its 2D FFT')
+        fft_act.triggered.connect(self._open_fft_dialog)
+        tools_menu.addAction(fft_act)
 
         help_menu = self.menuBar().addMenu('&Help')
         manual_act = QAction('&Manual', self)
@@ -2946,7 +3135,22 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._sidecar_fps         = sidecar.get('fps')
         self._sidecar_acq_time    = sidecar.get('acquisition_time', '')
         self._sidecar_notes       = sidecar.get('notes', '')
+        self._sidecar_objective   = sidecar.get('objective_magnification')
         self._stored_field_refs   = sidecar.get('field_references', {})
+
+        # Which camera wrote this sidecar determines the native sensor pixel
+        # pitch used for real spatial-frequency units (Tools > FFT). Neither
+        # app stamps a plain "camera" field, so detect by field names that are
+        # unique to each sidecar schema: Hamamatsu's FrameRecorder::writeSidecar()
+        # always writes "camera_bus"; the Lucid app's writeMetadataJson() always
+        # writes "save_format". Unknown sidecar -> None -> FFT falls back to
+        # cycles/pixel instead of guessing a pitch.
+        if 'camera_bus' in sidecar:
+            self._sidecar_pixel_pitch_um = _ORCAFIRE_PIXEL_UM
+        elif 'save_format' in sidecar:
+            self._sidecar_pixel_pitch_um = _LUCID_PIXEL_UM
+        else:
+            self._sidecar_pixel_pitch_um = None
         self._timestamps, self._ts_unit, self._gains, self._exposures, self._line_statuses = _load_timestamps(path)
 
         # Fall back to filename hint for pixel format if sidecar didn't provide it
@@ -4874,6 +5078,19 @@ class LucidViewer(ViewerMixin, QMainWindow):
             if self._reader is not None:
                 self._open_reader()
 
+    def _open_fft_dialog(self):
+        frame = self.imview.image
+        if frame is None:
+            QMessageBox.information(self, 'FFT', 'Open a file and load a frame first.')
+            return
+        pixel_size_um = None
+        if self._sidecar_objective and self._sidecar_pixel_pitch_um:
+            pixel_size_um = self._sidecar_pixel_pitch_um / self._sidecar_objective
+        dlg = _FFTDialog(frame, pixel_size_um=pixel_size_um,
+                          sensor_pixel_um=self._sidecar_pixel_pitch_um,
+                          parent=self, stylesheet=_DARK_STYLE)
+        dlg.exec()
+
     # ── TIFF export ───────────────────────────────────────────────────────────
     def _correction_suffix(self) -> str:
         """Filename suffix describing whatever dark/white/PCA correction is
@@ -4989,6 +5206,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
             meta['acquisition_time'] = self._sidecar_acq_time
         if self._sidecar_notes:
             meta['notes'] = self._sidecar_notes
+        if self._sidecar_objective:
+            meta['objective_magnification'] = self._sidecar_objective
         if self._timestamps is not None:
             meta['timestamps']     = self._timestamps.tolist()
             meta['timestamp_unit'] = self._ts_unit

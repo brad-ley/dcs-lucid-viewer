@@ -260,6 +260,15 @@ void AcquisitionWorker::setNotes(const QString& notes)
 
 
 // =============================================================================
+// setObjectiveMagnification
+// =============================================================================
+void AcquisitionWorker::setObjectiveMagnification(double magnification)
+{
+    m_objectiveMagnification = magnification;
+}
+
+
+// =============================================================================
 // setCameraParamsJson
 // =============================================================================
 void AcquisitionWorker::setCameraParamsJson(const QString& paramsJson)
@@ -1211,6 +1220,7 @@ void AcquisitionWorker::run()
                        << "\"exposure_us_mean\":" << std::fixed << std::setprecision(2)
                                                   << wf_exposureMean << ","
                        << "\"notes\":\""         << notesEsc        << "\","
+                       << "\"objective_magnification\":" << m_objectiveMagnification << ","
                        << "\"camera_settings\":" << paramsJson
                        << "}";
 
@@ -1931,6 +1941,7 @@ void AcquisitionWorker::writeMetadataJson(int64_t width, int64_t height,
     meta << "  \"session\": \""          << sessionName.toStdString() << "\",\n";
     meta << "  \"acquisition_time\": \"" << timestamp.toStdString()   << "\",\n";
     meta << "  \"notes\": \""            << notesEscaped               << "\",\n";
+    meta << "  \"objective_magnification\": " << m_objectiveMagnification << ",\n";
     meta << "  \"save_format\": \""      << formatString               << "\",\n";
     meta << "  \"width\": "              << width                      << ",\n";
     meta << "  \"height\": "             << height                     << ",\n";

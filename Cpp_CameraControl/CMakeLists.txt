@@ -84,6 +84,7 @@ set(SOURCES
     HistogramWidget.cpp       # Rotated histogram with level handles used in PreviewDialog
     ConfigDialog.cpp          # Preferences dialog for auto-contrast percentile thresholds
     AutoStopDialog.cpp        # Preferences dialog for timed auto-stop acquisition
+    ObjectiveDialog.cpp       # Preferences dialog for microscope objective magnification
     TiffWriter.cpp            # Hand-rolled multi-page TIFF writer (no external library)
     app.rc              # Windows resource file — embeds app.ico into the .exe
 )
@@ -101,6 +102,7 @@ set(HEADERS
     HistogramWidget.h
     ConfigDialog.h            # Preferences dialog declaration + static settings accessors
     AutoStopDialog.h          # Timed auto-stop dialog declaration + static settings accessors
+    ObjectiveDialog.h         # Microscope objective dialog declaration + static settings accessor
     TiffWriter.h              # TiffWriter class declaration
 )
 

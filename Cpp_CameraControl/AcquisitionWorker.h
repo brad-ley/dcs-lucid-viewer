@@ -168,6 +168,11 @@ public:
     // May contain newlines; they are JSON-escaped before writing.
     void setNotes(const QString& notes);
 
+    // Microscope objective magnification (e.g. 5.0 for a 5x objective), written
+    // into metadata.json as "objective_magnification". 0 = unset/unknown, in
+    // which case the field is omitted. See ObjectiveDialog.
+    void setObjectiveMagnification(double magnification);
+
     // Store a JSON string of the current camera settings (from the main window's visible params).
     // Written into metadata.json under "camera_settings" at acquisition start.
     // The JSON string is typically a compact object like:
@@ -263,6 +268,7 @@ private:
 
     // Free-form notes entered in the Notes dialog — written verbatim into metadata.json.
     QString m_notes;
+    double m_objectiveMagnification = 0.0;  // 0 = unset/unknown
 
     // JSON snippet of visible camera settings, passed from MainWindow via setCameraParamsJson().
     // Contains settings like {"PixelFormat":"Mono8","ExposureTime":5000.0,...}

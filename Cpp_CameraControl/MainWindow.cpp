@@ -16,6 +16,7 @@
 #include "MainWindow.h"
 #include "AdvancedParamsDialog.h"
 #include "AutoStopDialog.h"
+#include "ObjectiveDialog.h"
 #include "ConfigDialog.h"
 #include "PinnedParamsPanel.h"
 #include "PreviewDialog.h"
@@ -444,6 +445,17 @@ void MainWindow::buildUI() {
     // Sync the checkable action and Stop button with whatever the user saved.
     m_autoStopMenuAction->setChecked(AutoStopDialog::autoStopEnabled());
     refreshStopButton();
+  });
+
+  // ObjectiveDialog is modal and self-contained -- it reads/writes its own
+  // setting via QSettings, so there is nothing to pass in and nothing to
+  // read back. Wherever acquisition config is assembled, the worker is given
+  // ObjectiveDialog::magnification() -- see setNotes()/setObjectiveMagnification()
+  // call sites below.
+  QAction *objectiveAction = configMenu->addAction("Microscope Objective...");
+  connect(objectiveAction, &QAction::triggered, [this]() {
+    ObjectiveDialog dlg(this);
+    dlg.exec();
   });
 
   // --- Tools menu ---
@@ -1426,6 +1438,7 @@ void MainWindow::onStartClicked() {
       AcquisitionWorker::FieldType::None); // Normal acquisition
   m_worker->setCustomSessionName(resolvedName);
   m_worker->setNotes(m_notesText);
+  m_worker->setObjectiveMagnification(ObjectiveDialog::magnification());
   m_worker->setCameraParamsJson(paramsJson); // Pass params JSON to worker
   m_worker->setNodeMapSnapshotJson(
       AcquisitionWorker::buildCameraSettingsJson(m_cameraManager->getDevice()));
@@ -2133,6 +2146,7 @@ void MainWindow::startFieldCapture(AcquisitionWorker::FieldType ft) {
   if (ft == AcquisitionWorker::FieldType::Custom)
     m_worker->setCustomFieldName(m_sessionNameEdit->text().trimmed());
   m_worker->setNotes(m_notesText);
+  m_worker->setObjectiveMagnification(ObjectiveDialog::magnification());
   m_worker->setCameraParamsJson(paramsJson);
   m_worker->setNodeMapSnapshotJson(
       AcquisitionWorker::buildCameraSettingsJson(m_cameraManager->getDevice()));
