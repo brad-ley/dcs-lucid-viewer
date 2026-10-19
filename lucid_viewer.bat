@@ -8,7 +8,13 @@
 set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%PATH%"
 
 set "SCRIPT=Z:\6. Software\prod_code\LucidVisionCamera\lucid_viewer.py"
-set ENV_NAME=dcs-datascripts
+:: Dedicated env (matches environment.yml's own "name:") rather than the
+:: shared "dcs-datascripts" env used elsewhere on these machines -- PyQt6 and
+:: PyQt6-Qt6 (bindings vs. the actual Qt DLLs) aren't version-locked by pip,
+:: so an unrelated install into a shared env can silently push them out of
+:: sync and break this viewer with "DLL load failed ... QtWidgets" on launch.
+:: A dedicated env can't be perturbed by installs made for other scripts.
+set ENV_NAME=lucid-viewer
 
 cd /d "Z:\6. Software\prod_code\LucidVisionCamera"
 

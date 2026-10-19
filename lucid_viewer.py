@@ -2401,6 +2401,27 @@ class _FFTDialog(QDialog):
         self._roi.addScaleHandle([1, 1], [0, 0])
         self._src_view.getView().addItem(self._roi)
 
+        # Measure tool: a draggable-endpoint line for reading off feature sizes
+        # using the same calibration (pixel_size_um) as the spatial-frequency
+        # axis below, so a user can sanity-check a spacing they see in the FFT
+        # directly against the real image.
+        self._measure_line = pg.LineSegmentROI(
+            [[w * 0.35, h * 0.5], [w * 0.65, h * 0.5]],
+            pen=pg.mkPen('#ff5252', width=2))
+        self._measure_line.setVisible(False)
+        self._src_view.getView().addItem(self._measure_line)
+        self._measure_line.sigRegionChanged.connect(self._update_measure_label)
+
+        measure_row = QHBoxLayout()
+        self._measure_chk = QCheckBox('Measure line (drag the red endpoints)')
+        measure_row.addWidget(self._measure_chk)
+        measure_row.addStretch()
+        self._measure_lbl = QLabel('')
+        measure_row.addWidget(self._measure_lbl)
+        layout.addLayout(measure_row)
+        self._measure_chk.toggled.connect(self._measure_line.setVisible)
+        self._measure_chk.toggled.connect(self._update_measure_label)
+
         # ── options / action row ─────────────────────────────────────────────────
         opt_row = QHBoxLayout()
         self._window_chk = QCheckBox('Apply Hann window (reduce edge artifacts)')
@@ -2409,6 +2430,11 @@ class _FFTDialog(QDialog):
         opt_row.addStretch()
         self._compute_btn = QPushButton('Compute FFT')
         opt_row.addWidget(self._compute_btn)
+        self._export_btn = QPushButton('Export...')
+        self._export_btn.setToolTip(
+            'Save the radial profile as CSV, plus the full 2D log-power '
+            'spectrum as a companion TIFF.')
+        opt_row.addWidget(self._export_btn)
         layout.addLayout(opt_row)
 
         # ── FFT power spectrum / radial profile, split by a draggable handle ────
@@ -2453,6 +2479,13 @@ class _FFTDialog(QDialog):
 
         self._compute_btn.clicked.connect(self._compute_fft)
         self._roi.sigRegionChangeFinished.connect(self._compute_fft)
+        self._export_btn.clicked.connect(self._export_data)
+
+        # Populated by _compute_fft(); exported by _export_data().
+        self._last_freq_axis      = None
+        self._last_radial_profile = None
+        self._last_log_power      = None
+        self._last_roi_wh         = None
 
         src_levels = self._pct_levels(self._frame, 2, 98)
         self._src_view.setImage(self._frame, levels=src_levels, autoHistogramRange=False)
@@ -2512,12 +2545,93 @@ class _FFTDialog(QDialog):
         self._roi_lbl.setText(f'ROI {w}×{h} px')
         self._update_cutoff_label()
 
+        self._last_freq_axis      = bin_centers[1:]
+        self._last_radial_profile = radial_profile[1:]
+        self._last_log_power      = log_power
+        self._last_roi_wh         = (w, h)
+
     def _update_cutoff_label(self):
         freq = self._cutoff_line.value()
         period = (1.0 / freq) if freq > 0 else float('inf')
         self._cutoff_lbl.setText(
             f'Cutoff (drag the line): {freq:.4f} {self._freq_unit}  '
             f'(~{period:.2f} {self._period_unit} period)')
+
+    def _update_measure_label(self, *_args):
+        if not self._measure_chk.isChecked():
+            self._measure_lbl.setText('')
+            return
+        p1, p2 = self._measure_line.listPoints()
+        length_px = float(np.hypot(p2.x() - p1.x(), p2.y() - p1.y()))
+        if self._pixel_size_um:
+            length_um = length_px * self._pixel_size_um
+            self._measure_lbl.setText(
+                f'Length: {length_px:.1f} px  (~{length_um:.2f} µm)')
+        else:
+            self._measure_lbl.setText(f'Length: {length_px:.1f} px')
+
+    def _export_data(self):
+        """Save the radial profile as CSV, plus the full 2D log-power spectrum
+        as a companion TIFF and a PNG snapshot of the 1D plot itself (same
+        basename, "_spectrum"/"_plot" suffixes)."""
+        if self._last_freq_axis is None:
+            QMessageBox.information(self, 'Export', 'Compute the FFT first.')
+            return
+
+        out_path, _ = QFileDialog.getSaveFileName(
+            self, 'Export FFT radial profile', 'fft_radial_profile.csv',
+            'CSV files (*.csv);;All files (*)')
+        if not out_path:
+            return
+
+        w, h = self._last_roi_wh
+        try:
+            import csv
+            with open(out_path, 'w', newline='', encoding='utf-8') as fh:
+                writer = csv.writer(fh)
+                writer.writerow([f'# ROI {w}x{h} px'])
+                writer.writerow([f'# Hann window: {self._window_chk.isChecked()}'])
+                if self._pixel_size_um:
+                    writer.writerow(
+                        [f'# Pixel size at sample: {self._pixel_size_um:.4f} um/px'])
+                writer.writerow([f'spatial_frequency_{self._freq_unit}', 'mean_log_power'])
+                for freq, power in zip(self._last_freq_axis, self._last_radial_profile):
+                    writer.writerow([freq, power])
+        except OSError as exc:
+            QMessageBox.warning(self, 'Export error', f'Could not write {out_path}:\n{exc}')
+            return
+
+        spectrum_path = os.path.splitext(out_path)[0] + '_spectrum.tif'
+        try:
+            import tifffile
+            tifffile.imwrite(spectrum_path, self._last_log_power.astype(np.float32))
+        except ImportError:
+            QMessageBox.information(
+                self, 'Export',
+                f'CSV saved to {out_path}.\n\n'
+                'tifffile is not installed, so the 2D spectrum TIFF was skipped '
+                '(pip install tifffile to include it).')
+            return
+        except OSError as exc:
+            QMessageBox.warning(
+                self, 'Export error',
+                f'CSV saved to {out_path}, but the spectrum TIFF failed:\n{exc}')
+            return
+
+        plot_path = os.path.splitext(out_path)[0] + '_plot.png'
+        try:
+            import pyqtgraph.exporters
+            exporter = pyqtgraph.exporters.ImageExporter(self._radial_plot.plotItem)
+            exporter.export(plot_path)
+        except OSError as exc:
+            QMessageBox.warning(
+                self, 'Export error',
+                f'CSV and spectrum TIFF saved, but the plot PNG failed:\n{exc}')
+            return
+
+        QMessageBox.information(
+            self, 'Export',
+            f'Saved:\n{out_path}\n{spectrum_path}\n{plot_path}')
 
 
 # ── Trigger-aware slider ──────────────────────────────────────────────────────
@@ -2707,6 +2821,12 @@ class LucidViewer(ViewerMixin, QMainWindow):
         open_act.setShortcut(QKeySequence.StandardKey.Open)
         open_act.triggered.connect(self.open_file)
         file_menu.addAction(open_act)
+        self._reveal_act = QAction('&Reveal in File Explorer', self)
+        self._reveal_act.setStatusTip(
+            "Open the current recording's folder in File Explorer")
+        self._reveal_act.setEnabled(False)
+        self._reveal_act.triggered.connect(self._reveal_recording_folder)
+        file_menu.addAction(self._reveal_act)
         file_menu.addSeparator()
         self._export_act = QAction('&Export TIFF stack…', self)
         self._export_act.setShortcut(QKeySequence('Ctrl+E'))
@@ -3385,6 +3505,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._export_frame_act.setEnabled(True)
         self._export_avg_act.setEnabled(True)
         self._export_gif_act.setEnabled(True)
+        self._reveal_act.setEnabled(True)
 
         self._stop_play()
         self.frame_slider.setMaximum(max(0, n - 1))
@@ -5091,6 +5212,18 @@ class LucidViewer(ViewerMixin, QMainWindow):
                           sensor_pixel_um=self._sidecar_pixel_pitch_um,
                           parent=self, stylesheet=_DARK_STYLE)
         dlg.exec()
+
+    def _reveal_recording_folder(self):
+        if not self._path:
+            QMessageBox.information(self, 'Reveal in File Explorer',
+                                    'No recording is open yet.')
+            return
+        folder = os.path.dirname(self._path)
+        if not os.path.isdir(folder):
+            QMessageBox.warning(self, 'Reveal in File Explorer',
+                                f'Folder not found:\n{folder}')
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     # ── TIFF export ───────────────────────────────────────────────────────────
     def _correction_suffix(self) -> str:
