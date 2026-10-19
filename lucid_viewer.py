@@ -2454,7 +2454,8 @@ class _FFTDialog(QDialog):
         self._compute_btn.clicked.connect(self._compute_fft)
         self._roi.sigRegionChangeFinished.connect(self._compute_fft)
 
-        self._src_view.setImage(self._frame, autoHistogramRange=True)
+        src_levels = self._pct_levels(self._frame, 2, 98)
+        self._src_view.setImage(self._frame, levels=src_levels, autoHistogramRange=False)
         self._compute_fft()
 
     # ── FFT computation ───────────────────────────────────────────────────────
