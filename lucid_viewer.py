@@ -12,6 +12,34 @@ compute bytes-per-frame and derive the frame count automatically.
 
 import sys
 import os
+
+# When this script is launched with no console anywhere in its process tree
+# -- notably when HamamatsuOrcaFire/Cpp_CameraControl (Qt C++ apps) open it
+# via QProcess::startDetached("cmd.exe", {"/c", batPath}, ...) -- Python can
+# end up with sys.stdout/stderr/stdin as None or backed by no real handle.
+# CPython's stdio is initialized lazily, so this doesn't fail at launch; it
+# surfaces the first time ANYTHING tries to write to one of them, which
+# isn't only our own code -- e.g. a numpy RuntimeWarning (divide-by-zero in
+# the PCA correction math) goes through the stdlib warnings module straight
+# to sys.stderr, with no try/except of ours anywhere on that path. That
+# failure is fatal: it happens deep enough in interpreter machinery that
+# Python aborts the whole process (0xc06d007f in KERNELBASE.dll is the CRT
+# abort() signature, not a plain access violation) rather than raising
+# something catchable in our code. Patching in no-op streams up front --
+# before any other import that might warn or print -- closes this off
+# regardless of which library tries to write.
+class _NullStream:
+    def write(self, *a, **k): pass
+    def flush(self, *a, **k): pass
+    def isatty(self): return False
+
+if sys.stdout is None:
+    sys.stdout = _NullStream()
+if sys.stderr is None:
+    sys.stderr = _NullStream()
+if sys.stdin is None:
+    sys.stdin = _NullStream()
+
 import tempfile
 import re
 import json
