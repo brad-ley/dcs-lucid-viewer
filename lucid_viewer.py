@@ -2737,13 +2737,17 @@ class _CalibrationDialog(QDialog):
         pixel_size_um = known_um / length_px
         camera_kind = 'lucid' if self._camera_combo.currentIndex() == 1 else 'orcafire'
         objective = self._objective_spin.value()
+        sensor_pitch_um = _LUCID_PIXEL_UM if camera_kind == 'lucid' else _ORCAFIRE_PIXEL_UM
+        true_magnification = sensor_pitch_um / pixel_size_um
         path = _save_calibration_entry(
             camera_kind, objective, pixel_size_um,
-            extra={'line_length_px': length_px, 'known_length_um': known_um})
+            extra={'line_length_px': length_px, 'known_length_um': known_um,
+                   'true_magnification': true_magnification})
         if path:
             self._status_lbl.setText(
                 f'Saved {pixel_size_um:.4f} µm/px for {self._camera_combo.currentText()} '
-                f'@ {objective:g}x → {path}')
+                f'@ nominal {objective:g}x (true magnification ≈ {true_magnification:.2f}x) '
+                f'→ {path}')
         else:
             QMessageBox.warning(self, 'Calibrate',
                                 'Could not write the calibration file (network share and '
