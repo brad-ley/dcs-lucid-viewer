@@ -2518,6 +2518,15 @@ def _resolve_pixel_size_um(camera_kind, objective, sensor_pitch_um):
     return None
 
 
+def _format_length_um(length_um):
+    """Auto-scaled length string: um below 1 mm, mm at or above it -- objectives
+    here span 2x-20x, so a measured/calibration length can land anywhere from
+    single-digit um to several mm depending on which one's in use."""
+    if length_um >= 1000.0:
+        return f'{length_um / 1000.0:.3f} mm'
+    return f'{length_um:.2f} µm'
+
+
 # "Nice" round scale-bar lengths, in micrometers, to choose from so the bar
 # never reads something awkward like "37 um".
 _SCALE_BAR_STEPS_UM = [1, 2, 5, 10, 20, 50, 100, 200, 500,
@@ -2641,12 +2650,17 @@ class _CalibrationDialog(QDialog):
         layout.addWidget(self._list)
 
         calib_row = QHBoxLayout()
-        calib_row.addWidget(QLabel('Known length (µm):'))
+        calib_row.addWidget(QLabel('Known length:'))
         self._length_spin = QDoubleSpinBox()
         self._length_spin.setRange(0.001, 1e7)
         self._length_spin.setDecimals(3)
         self._length_spin.setValue(100.0)
         calib_row.addWidget(self._length_spin)
+        # 2x-20x objectives here mean a calibration target can reasonably be
+        # anywhere from single-digit um to several mm -- don't force one unit.
+        self._length_unit_combo = QComboBox()
+        self._length_unit_combo.addItems(['µm', 'mm'])
+        calib_row.addWidget(self._length_unit_combo)
         calib_btn = QPushButton('Calibrate from selected line')
         calib_btn.clicked.connect(self._calibrate_from_selected)
         calib_row.addWidget(calib_btn)
@@ -2718,6 +2732,8 @@ class _CalibrationDialog(QDialog):
             QMessageBox.warning(self, 'Calibrate', 'That line has zero length.')
             return
         known_um = self._length_spin.value()
+        if self._length_unit_combo.currentText() == 'mm':
+            known_um *= 1000.0
         pixel_size_um = known_um / length_px
         camera_kind = 'lucid' if self._camera_combo.currentIndex() == 1 else 'orcafire'
         objective = self._objective_spin.value()
@@ -2958,7 +2974,7 @@ class _FFTDialog(QDialog):
         if self._pixel_size_um:
             length_um = length_px * self._pixel_size_um
             self._measure_lbl.setText(
-                f'Length: {length_px:.1f} px  (~{length_um:.2f} µm)')
+                f'Length: {length_px:.1f} px  (~{_format_length_um(length_um)})')
         else:
             self._measure_lbl.setText(f'Length: {length_px:.1f} px')
 
