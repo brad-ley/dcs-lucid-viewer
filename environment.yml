@@ -8,17 +8,27 @@ dependencies:
   - scipy
   - pip
   - pip:
-    # PyQt6 / PyQt6-Qt6 / PyQt6-sip pinned together to a combination verified
-    # working, rather than left to float. These aren't locked to each other
+    # PyQt6 / PyQt6-Qt6 pinned together to a combination verified working on
+    # most PCs, rather than left to float. These aren't locked to each other
     # by pip's resolver -- a PC that happens to create this env on a
     # different day can land on a different PyQt6-Qt6 patch release than the
     # PyQt6 bindings were tested against, and some patch releases break ABI
     # compatibility with "DLL load failed ... The specified procedure could
     # not be found" on import (seen in the wild: PyQt6 6.11.0 + PyQt6-Qt6
-    # 6.11.2 failed outright, while 6.11.0 + 6.11.1 here did not).
-    - PyQt6==6.11.0
-    - PyQt6-Qt6==6.11.1
-    - PyQt6-sip==13.11.1
+    # 6.11.2 failed outright, while 6.11.0 + 6.11.1 worked on most machines).
+    #
+    # On at least one PC with a stale/under-serviced Windows CRT, 6.11.x's
+    # Qt6 binaries fail to import at all, while an older PyQt6 (6.5.2) that
+    # does import crashes on window creation (0xc0000005 inside python312.dll)
+    # because its compiled bindings call sip's legacy, unsafe
+    # sipPyTypeDict() rather than the modern sipPyTypeDictRef(). 6.7.1 is a
+    # bisection attempt between those two failure modes -- it isn't yet
+    # confirmed to dodge both. If it still fails, note which error comes
+    # back (import-time DLL error vs. a silent crash/nothing appears) so we
+    # can bisect further in the right direction.
+    - PyQt6==6.7.1
+    - PyQt6-Qt6==6.7.1
+    - PyQt6-sip==13.6.0
     - pyqtgraph==0.14.0
     - tifffile
     - opencv-python
