@@ -2130,9 +2130,17 @@ class _PcaSettingsDialog(QDialog):
 # ── PCA eigenvector viewer ────────────────────────────────────────────────────
 
 class _PcaTemporalWeightWorker(QThread):
-    """Compute per-frame projection coefficients for ALL PCA components in one pass."""
+    """Compute per-frame projection coefficients for ALL PCA components in one pass.
+
+    This is a diagnostic, not a quantitative result, so a long recording
+    (e.g. 30s at 82 Hz = ~2460 frames, full-frame) is subsampled evenly down
+    to at most MAX_FRAMES frames rather than walking every single one --
+    full coverage buys little here and costs a lot of wall-clock time.
+    """
+    MAX_FRAMES = 250
+
     progress = pyqtSignal(int)
-    done     = pyqtSignal(object)   # np.ndarray shape (n_components, n_frames)
+    done     = pyqtSignal(object, object)   # (n_components, n_sampled) coeffs, sampled frame indices
     error    = pyqtSignal(str)
 
     def __init__(self, components, mean, reader, parent=None):
@@ -2145,15 +2153,21 @@ class _PcaTemporalWeightWorker(QThread):
         try:
             n_frames = len(self._reader)
             n_comp   = self._comps.shape[0]
-            coeffs   = np.empty((n_comp, n_frames), dtype=np.float32)
-            report_every = max(1, n_frames // 100)
-            for i in range(n_frames):
-                frame      = self._reader[i].astype(np.float32).ravel()
+            if n_frames > self.MAX_FRAMES:
+                indices = np.linspace(0, n_frames - 1, self.MAX_FRAMES).round().astype(np.int64)
+                indices = np.unique(indices)
+            else:
+                indices = np.arange(n_frames, dtype=np.int64)
+            n_sampled = len(indices)
+            coeffs   = np.empty((n_comp, n_sampled), dtype=np.float32)
+            report_every = max(1, n_sampled // 100)
+            for i, frame_idx in enumerate(indices):
+                frame      = self._reader[int(frame_idx)].astype(np.float32).ravel()
                 coeffs[:, i] = self._comps @ (frame - self._mean)
                 if i % report_every == 0:
-                    self.progress.emit(int(100 * i / n_frames))
+                    self.progress.emit(int(100 * i / n_sampled))
             self.progress.emit(100)
-            self.done.emit(coeffs)
+            self.done.emit(coeffs, indices)
         except Exception as exc:
             self.error.emit(str(exc))
 
@@ -2177,9 +2191,10 @@ class _PcaEigenvectorDialog(QDialog):
         self._reader        = reader
         self._timestamps    = timestamps   # (n_frames,) float64 or None
         self._ts_unit       = ts_unit or ''
-        self._weight_worker = None
-        self._all_coeffs    = None   # (n_components, n_frames) once computed
-        self._current_idx   = 0
+        self._weight_worker  = None
+        self._all_coeffs     = None   # (n_components, n_sampled) once computed
+        self._sample_indices = None   # (n_sampled,) frame indices into the recording
+        self._current_idx    = 0
         n = components.shape[0]
 
         layout = QVBoxLayout(self)
@@ -2295,25 +2310,28 @@ class _PcaEigenvectorDialog(QDialog):
         self._weight_worker.error.connect(self._on_weights_error)
         self._weight_worker.start()
 
-    def _on_weights_done(self, all_coeffs):
-        # all_coeffs: (n_components, n_frames)
-        self._weight_worker = None
-        self._all_coeffs    = all_coeffs
+    def _on_weights_done(self, all_coeffs, sample_indices):
+        # all_coeffs: (n_components, n_sampled); sample_indices: (n_sampled,)
+        # frame indices into the original recording (subsampled, see
+        # _PcaTemporalWeightWorker.MAX_FRAMES).
+        self._weight_worker  = None
+        self._all_coeffs     = all_coeffs
+        self._sample_indices = sample_indices
         self._weight_btn.setEnabled(True)
         self._weight_btn.setText('Recompute temporal weights')
         self._weight_prog.setVisible(False)
         self._update_weight_plot(self._current_idx)
 
     def _update_weight_plot(self, idx):
-        coeffs = self._all_coeffs[idx]
-        n      = self._components.shape[0]
+        coeffs  = self._all_coeffs[idx]
+        indices = self._sample_indices
+        n       = self._components.shape[0]
 
-        if (self._timestamps is not None
-                and len(self._timestamps) == len(coeffs)):
-            x     = self._timestamps
+        if self._timestamps is not None and len(self._timestamps) > indices.max():
+            x     = self._timestamps[indices]
             x_lbl = f'Time ({self._ts_unit})' if self._ts_unit else 'Time'
         else:
-            x     = np.arange(len(coeffs), dtype=np.float32)
+            x     = indices.astype(np.float32)
             x_lbl = 'Frame'
 
         self._plot.setLabel('bottom', x_lbl)
@@ -2753,6 +2771,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._sidecar_notes     = ''
         self._sidecar_objective = None
         self._sidecar_pixel_pitch_um = None
+        self._camera_kind       = None   # 'orcafire' | 'lucid' | None, see _apply_hints()
         self._timestamps        = None   # 1-D float64, relative, display units
         self._ts_unit           = ''
         self._gains             = None   # 1-D float64, per-frame gain dB (from frame_data.csv)
@@ -3260,17 +3279,21 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._stored_field_refs   = sidecar.get('field_references', {})
 
         # Which camera wrote this sidecar determines the native sensor pixel
-        # pitch used for real spatial-frequency units (Tools > FFT). Neither
-        # app stamps a plain "camera" field, so detect by field names that are
-        # unique to each sidecar schema: Hamamatsu's FrameRecorder::writeSidecar()
-        # always writes "camera_bus"; the Lucid app's writeMetadataJson() always
+        # pitch (Tools > FFT) and which field-folder naming convention to
+        # search for (see _pca_field_keywords()). Neither app stamps a plain
+        # "camera" field, so detect by field names that are unique to each
+        # sidecar schema: Hamamatsu's FrameRecorder::writeSidecar() always
+        # writes "camera_bus"; the Lucid app's writeMetadataJson() always
         # writes "save_format". Unknown sidecar -> None -> FFT falls back to
-        # cycles/pixel instead of guessing a pitch.
+        # cycles/pixel, and field search tries both naming conventions.
         if 'camera_bus' in sidecar:
+            self._camera_kind = 'orcafire'
             self._sidecar_pixel_pitch_um = _ORCAFIRE_PIXEL_UM
         elif 'save_format' in sidecar:
+            self._camera_kind = 'lucid'
             self._sidecar_pixel_pitch_um = _LUCID_PIXEL_UM
         else:
+            self._camera_kind = None
             self._sidecar_pixel_pitch_um = None
         self._timestamps, self._ts_unit, self._gains, self._exposures, self._line_statuses = _load_timestamps(path)
 
@@ -3748,7 +3771,25 @@ class LucidViewer(ViewerMixin, QMainWindow):
         except Exception:
             return None
 
-    def _find_field_folder(self, keyword: str, min_frames: int = 1,
+    def _pca_field_keywords(self):
+        """Folder-name keyword(s) to search for the multi-frame PCA source.
+
+        The two acquisition apps name this folder differently: Cpp_CameraControl
+        (Lucid camera) reuses the "white_field" prefix for both the flat-field
+        mean and the multi-frame PCA capture, distinguishing them only by frame
+        count; HamamatsuOrcaFire instead gives the multi-frame PCA capture its
+        own "pca_background" prefix, keeping "white_field" for the flat-field
+        mean only. Pick the convention that matches the camera that wrote this
+        recording's sidecar (self._camera_kind, set in _apply_hints()); when
+        unknown, try both rather than guessing wrong.
+        """
+        if self._camera_kind == 'orcafire':
+            return ('pca_background',)
+        if self._camera_kind == 'lucid':
+            return ('white_field',)
+        return ('white_field', 'pca_background')
+
+    def _find_field_folder(self, keyword, min_frames: int = 1,
                            sidecar_key: str = None, exclude: str = None):
         """Return path to best shape-matching folder whose name contains keyword.
 
@@ -3758,6 +3799,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
                   (3) closest-timestamp match with unknown shape and enough frames,
                   (4) None.
 
+        keyword: a single substring, or a tuple/list of substrings -- a folder
+                 matches if its name contains ANY of them (see _pca_field_keywords()).
         min_frames: skip folders that contain fewer than this many frames (use 2
                     for PCA so pre-averaged single-frame folders are bypassed).
         exclude: if set, skip auto-search candidates whose name contains this string
@@ -3765,13 +3808,15 @@ class LucidViewer(ViewerMixin, QMainWindow):
         """
         if not self._path:
             return None
+        keywords = (keyword,) if isinstance(keyword, str) else tuple(keyword)
 
         tw = self._reader.w if self._reader else self.w_spin.value()
         th = self._reader.h if self._reader else self.h_spin.value()
 
         # --- stored sidecar reference ---
         refs = self._stored_field_refs or {}
-        stored = refs.get(sidecar_key if sidecar_key else ('dark_folder' if 'dark' in keyword else 'white_folder'))
+        stored = refs.get(sidecar_key if sidecar_key else
+                          ('dark_folder' if any('dark' in kw for kw in keywords) else 'white_folder'))
         if stored and os.path.isdir(stored):
             shape = self._field_folder_shape(stored)
             if shape is None or shape == (tw, th):
@@ -3792,7 +3837,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 continue
             raw_candidates = [
                 d for d in all_entries
-                if keyword in d and os.path.isdir(os.path.join(search_dir, d))
+                if any(kw in d for kw in keywords) and os.path.isdir(os.path.join(search_dir, d))
                 and (exclude is None or exclude not in d.lower())
             ]
             if exp_ts:
@@ -4175,7 +4220,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if self._reader is not None:
             if self._find_field_folder('white_field', min_frames=1):
                 flat_ok = True
-            if self._find_field_folder('white_field', min_frames=2):
+            if self._find_field_folder(self._pca_field_keywords(), min_frames=2):
                 pca_ok = True
 
         model = self.white_combo.model()
@@ -4314,7 +4359,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._compute_universal_pca()
             return
 
-        folder = self._find_field_folder('white_field', min_frames=2, sidecar_key='white_pca_folder')
+        folder = self._find_field_folder(self._pca_field_keywords(), min_frames=2,
+                                         sidecar_key='white_pca_folder')
         if folder is None:
             self.corr_status_lbl.setText('white_field folder not found')
             self.white_chk.blockSignals(True)
