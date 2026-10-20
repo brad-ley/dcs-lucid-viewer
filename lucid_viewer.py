@@ -82,7 +82,7 @@ from PyQt6.QtWidgets import (
     QSplitter, QMessageBox, QSlider, QCheckBox, QSizePolicy,
     QDialog, QProgressBar, QDialogButtonBox, QFrame, QMenu,
     QInputDialog, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView,
+    QAbstractItemView, QDoubleSpinBox, QListWidget,
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon
@@ -2439,6 +2439,300 @@ class _PcaEigenvectorDialog(QDialog):
 _ORCAFIRE_PIXEL_UM = 4.6
 _LUCID_PIXEL_UM    = 2.74
 
+# ── Per-objective magnification calibration store ────────────────────────────
+#
+# A measured (camera, objective) -> real-world um/pixel calibration, saved by
+# the "Calibrate Objective..." dialog from a line drawn across a feature of
+# known physical length. This is preferred over the theoretical
+# pitch/magnification estimate above wherever both are available, since it
+# accounts for whatever the optical path actually does (tube lens, etc.)
+# rather than assuming an ideal one.
+#
+# Shared across every PC running this viewer: stored on the same network
+# share the app itself is deployed from, next to (but not inside, so a
+# "git pull" never touches it) prod_code/LucidVisionCamera. Reads/writes try
+# that shared copy first so every workstation sees the same calibration; if
+# the share is unreachable (drive not mapped, no permission, etc.) they fall
+# back to a per-machine local copy instead.
+_CALIBRATION_NETWORK_PATH = r'Z:\6. Software\prod_code\objective_calibration.json'
+_CALIBRATION_LOCAL_PATH = os.path.join(
+    os.environ.get('LOCALAPPDATA') or tempfile.gettempdir(),
+    'LucidViewer', 'objective_calibration.json')
+
+
+def _calibration_key(camera_kind, objective):
+    camera_kind = camera_kind or 'unknown'
+    return f'{camera_kind}|{float(objective):g}'
+
+
+def _load_calibration_store():
+    """Return (data_dict, path_used) -- the shared network copy if readable,
+    else the local fallback, else ({}, None)."""
+    for path in (_CALIBRATION_NETWORK_PATH, _CALIBRATION_LOCAL_PATH):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f), path
+        except (OSError, ValueError):
+            continue
+    return {}, None
+
+
+def _save_calibration_entry(camera_kind, objective, pixel_size_um, extra=None):
+    """Write one (camera, objective) -> pixel_size_um entry, merging with
+    whatever's already stored there. Tries the shared network path first;
+    falls back to the local path only if that's unreachable. Returns the
+    path actually written, or None if both failed."""
+    key = _calibration_key(camera_kind, objective)
+    entry = {'pixel_size_um': pixel_size_um,
+              'camera_kind': camera_kind, 'objective_magnification': objective,
+              'saved_at': time.strftime('%Y-%m-%dT%H:%M:%S')}
+    if extra:
+        entry.update(extra)
+    for path in (_CALIBRATION_NETWORK_PATH, _CALIBRATION_LOCAL_PATH):
+        try:
+            data = {}
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            data[key] = entry
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, sort_keys=True)
+            return path
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _resolve_pixel_size_um(camera_kind, objective, sensor_pitch_um):
+    """Real-world um/pixel for this (camera, objective): a saved measured
+    calibration if one exists, else the theoretical pitch/magnification
+    estimate, else None (unknown camera or no objective recorded)."""
+    if camera_kind and objective:
+        data, _ = _load_calibration_store()
+        entry = data.get(_calibration_key(camera_kind, objective))
+        if entry and entry.get('pixel_size_um'):
+            return float(entry['pixel_size_um'])
+    if sensor_pitch_um and objective:
+        return sensor_pitch_um / objective
+    return None
+
+
+# "Nice" round scale-bar lengths, in micrometers, to choose from so the bar
+# never reads something awkward like "37 um".
+_SCALE_BAR_STEPS_UM = [1, 2, 5, 10, 20, 50, 100, 200, 500,
+                       1000, 2000, 5000, 10000, 20000, 50000]
+
+
+def _nice_scale_bar_length_um(view_width_um):
+    """Largest step at or under ~22% of the visible width, so the bar reads
+    cleanly without dominating the image."""
+    target = view_width_um * 0.22
+    chosen = _SCALE_BAR_STEPS_UM[0]
+    for step in _SCALE_BAR_STEPS_UM:
+        if step <= target:
+            chosen = step
+        else:
+            break
+    return chosen
+
+
+def _update_scale_bar(view_box, bar_ref, pixel_size_um, image_width_px):
+    """Add/replace a bottom-right scale bar on `view_box`. `bar_ref` is a
+    single-element list holding the current pg.ScaleBar (or None), so this
+    can be called repeatedly (new file, new calibration) without stacking
+    bars. Removes any existing bar and draws nothing if pixel_size_um or
+    image_width_px is unknown."""
+    if bar_ref[0] is not None:
+        try:
+            bar_ref[0].setParentItem(None)
+        except Exception:
+            pass
+        bar_ref[0] = None
+    if not pixel_size_um or not image_width_px:
+        return
+    width_um = image_width_px * pixel_size_um
+    length_um = _nice_scale_bar_length_um(width_um)
+    length_px = length_um / pixel_size_um
+    label = f'{length_um/1000:g} mm' if length_um >= 1000 else f'{length_um:g} \u00b5m'
+    bar = pg.ScaleBar(size=length_px, suffix='m', offset=(-20, -20))
+    bar.text.setText(label)
+    bar.setParentItem(view_box)
+    bar.anchor((1, 1), (1, 1), offset=(-20, -20))
+    bar_ref[0] = bar
+
+
+class _CalibrationDialog(QDialog):
+    """Non-modal dialog: measure a feature of known physical length to derive
+    real um/pixel for a given (camera, objective), saved to the shared
+    calibration store (see _save_calibration_entry()).
+
+    Draw mode: click once to set a line's start, click again to set its end
+    -- deliberately two discrete clicks rather than a press-drag-release
+    gesture, so it works the same whether or not the mouse button stays held
+    the whole time. Each finished line stays on screen (no replacement) with
+    its own pixel-length label, so several can be drawn and compared before
+    picking which one to calibrate from.
+    """
+
+    def __init__(self, frame, camera_kind=None, objective=None,
+                 parent=None, stylesheet=''):
+        super().__init__(parent)
+        self.setWindowTitle('Calibrate Objective')
+        self.setMinimumSize(720, 760)
+        if stylesheet:
+            self.setStyleSheet(stylesheet)
+
+        self._frame = np.asarray(frame)
+        self._draw_mode = False
+        self._pending_start = None   # (x, y) image coords after the first click
+        self._lines = []             # [{'roi', 'label', 'length_px'}, ...]
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(6)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        layout.addWidget(QLabel(
+            'Draw a line across a feature of known physical length (a stage '
+            'micrometer, a ruler, etc.), enter that length in micrometers, '
+            'then calibrate. Saved per camera + objective, reused '
+            'automatically for recordings taken with the same setup.'))
+
+        cam_row = QHBoxLayout()
+        cam_row.addWidget(QLabel('Camera:'))
+        self._camera_combo = QComboBox()
+        self._camera_combo.addItems(['ORCA-Fire', 'Lucid'])
+        self._camera_combo.setCurrentIndex(1 if camera_kind == 'lucid' else 0)
+        cam_row.addWidget(self._camera_combo)
+        cam_row.addWidget(QLabel('Objective (x):'))
+        self._objective_spin = QDoubleSpinBox()
+        self._objective_spin.setRange(0.1, 1000.0)
+        self._objective_spin.setDecimals(2)
+        self._objective_spin.setValue(objective if objective else 5.0)
+        cam_row.addWidget(self._objective_spin)
+        cam_row.addStretch()
+        layout.addLayout(cam_row)
+
+        self._view = pg.ImageView()
+        self._view.ui.roiBtn.hide()
+        self._view.ui.menuBtn.hide()
+        self._view.setMinimumHeight(360)
+        layout.addWidget(self._view)
+        levels = (float(np.percentile(self._frame, 2)), float(np.percentile(self._frame, 98)))
+        self._view.setImage(self._frame, levels=levels, autoHistogramRange=False)
+        self._view.getView().scene().sigMouseClicked.connect(self._on_scene_clicked)
+
+        btn_row = QHBoxLayout()
+        self._draw_btn = QPushButton('Draw line')
+        self._draw_btn.setCheckable(True)
+        self._draw_btn.setToolTip(
+            'Click once on the image to start a line, click again to end it. '
+            'Stays on to draw more lines until toggled off.')
+        self._draw_btn.toggled.connect(self._on_draw_toggled)
+        btn_row.addWidget(self._draw_btn)
+        clear_btn = QPushButton('Clear all lines')
+        clear_btn.clicked.connect(self._clear_lines)
+        btn_row.addWidget(clear_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self._list = QListWidget()
+        self._list.setMaximumHeight(110)
+        layout.addWidget(self._list)
+
+        calib_row = QHBoxLayout()
+        calib_row.addWidget(QLabel('Known length (µm):'))
+        self._length_spin = QDoubleSpinBox()
+        self._length_spin.setRange(0.001, 1e7)
+        self._length_spin.setDecimals(3)
+        self._length_spin.setValue(100.0)
+        calib_row.addWidget(self._length_spin)
+        calib_btn = QPushButton('Calibrate from selected line')
+        calib_btn.clicked.connect(self._calibrate_from_selected)
+        calib_row.addWidget(calib_btn)
+        calib_row.addStretch()
+        layout.addLayout(calib_row)
+
+        self._status_lbl = QLabel('')
+        self._status_lbl.setWordWrap(True)
+        layout.addWidget(self._status_lbl)
+
+        close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_box.rejected.connect(self.reject)
+        layout.addWidget(close_box)
+
+    def _on_draw_toggled(self, checked):
+        self._draw_mode = checked
+        self._pending_start = None
+        # Disable pan/zoom-by-drag while drawing, so a click meant to place
+        # a line endpoint doesn't also drag the view.
+        self._view.getView().setMouseEnabled(x=not checked, y=not checked)
+
+    def _on_scene_clicked(self, ev):
+        if not self._draw_mode:
+            return
+        pos = self._view.getView().mapSceneToView(ev.scenePos())
+        x, y = pos.x(), pos.y()
+        if self._pending_start is None:
+            self._pending_start = (x, y)
+        else:
+            self._finish_line(self._pending_start, (x, y))
+            self._pending_start = None
+
+    def _finish_line(self, p0, p1):
+        roi = pg.LineSegmentROI([p0, p1], pen=pg.mkPen('#ffcc00', width=2))
+        self._view.getView().addItem(roi)
+        label = pg.TextItem('', color='#ffcc00', anchor=(0.5, 1))
+        self._view.getView().addItem(label)
+        entry = {'roi': roi, 'label': label, 'length_px': 0.0}
+        self._lines.append(entry)
+        self._list.addItem('')
+        roi.sigRegionChanged.connect(lambda _r, e=entry: self._on_line_changed(e))
+        self._on_line_changed(entry)
+
+    def _on_line_changed(self, entry):
+        pts = entry['roi'].listPoints()
+        p0, p1 = pts[0], pts[1]
+        length_px = ((p1.x() - p0.x()) ** 2 + (p1.y() - p0.y()) ** 2) ** 0.5
+        entry['length_px'] = length_px
+        entry['label'].setPos((p0.x() + p1.x()) / 2.0, (p0.y() + p1.y()) / 2.0)
+        entry['label'].setText(f'{length_px:.1f} px')
+        idx = self._lines.index(entry)
+        self._list.item(idx).setText(f'Line {idx + 1}: {length_px:.1f} px')
+
+    def _clear_lines(self):
+        view = self._view.getView()
+        for entry in self._lines:
+            view.removeItem(entry['roi'])
+            view.removeItem(entry['label'])
+        self._lines = []
+        self._list.clear()
+
+    def _calibrate_from_selected(self):
+        idx = self._list.currentRow()
+        if idx < 0 or idx >= len(self._lines):
+            QMessageBox.information(self, 'Calibrate', 'Select a line from the list first.')
+            return
+        length_px = self._lines[idx]['length_px']
+        if length_px <= 0:
+            QMessageBox.warning(self, 'Calibrate', 'That line has zero length.')
+            return
+        known_um = self._length_spin.value()
+        pixel_size_um = known_um / length_px
+        camera_kind = 'lucid' if self._camera_combo.currentIndex() == 1 else 'orcafire'
+        objective = self._objective_spin.value()
+        path = _save_calibration_entry(
+            camera_kind, objective, pixel_size_um,
+            extra={'line_length_px': length_px, 'known_length_um': known_um})
+        if path:
+            self._status_lbl.setText(
+                f'Saved {pixel_size_um:.4f} µm/px for {self._camera_combo.currentText()} '
+                f'@ {objective:g}x → {path}')
+        else:
+            QMessageBox.warning(self, 'Calibrate',
+                                'Could not write the calibration file (network share and '
+                                'local fallback both failed).')
+
 
 class _FFTDialog(QDialog):
     """Non-modal dialog: pick a rectangular FOV on the current frame and inspect
@@ -2584,6 +2878,9 @@ class _FFTDialog(QDialog):
 
         src_levels = self._pct_levels(self._frame, 2, 98)
         self._src_view.setImage(self._frame, levels=src_levels, autoHistogramRange=False)
+        self._scale_bar_ref = [None]
+        _update_scale_bar(self._src_view.getView(), self._scale_bar_ref,
+                          pixel_size_um, self._frame.shape[1])
         self._compute_fft()
 
     # ── FFT computation ───────────────────────────────────────────────────────
@@ -2849,6 +3146,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._sidecar_objective = None
         self._sidecar_pixel_pitch_um = None
         self._camera_kind       = None   # 'orcafire' | 'lucid' | None, see _apply_hints()
+        self._scale_bar_ref     = [None]  # current pg.ScaleBar on the main view, see _update_scale_bar()
         self._timestamps        = None   # 1-D float64, relative, display units
         self._ts_unit           = ''
         self._gains             = None   # 1-D float64, per-frame gain dB (from frame_data.csv)
@@ -2974,6 +3272,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         fft_act.setStatusTip('Pick a FOV on the current frame and view its 2D FFT')
         fft_act.triggered.connect(self._open_fft_dialog)
         tools_menu.addAction(fft_act)
+        calib_act = QAction('&Calibrate Objective…', self)
+        calib_act.setStatusTip('Measure a known-length feature to derive real um/pixel')
+        calib_act.triggered.connect(self._open_calibration_dialog)
+        tools_menu.addAction(calib_act)
 
         help_menu = self.menuBar().addMenu('&Help')
         manual_act = QAction('&Manual', self)
@@ -3674,6 +3976,14 @@ class LucidViewer(ViewerMixin, QMainWindow):
         auto = not self._auto_levels_done
         self._auto_levels_done = True
         self.imview.setImage(display_frame, autoLevels=auto, autoRange=False)
+        if auto:
+            # Only recompute on a fresh file load (auto-levels reset), not
+            # every frame scrub within the same recording -- pixel size only
+            # depends on which file/objective is open, not the frame index.
+            pixel_size_um = _resolve_pixel_size_um(
+                self._camera_kind, self._sidecar_objective, self._sidecar_pixel_pitch_um)
+            _update_scale_bar(self.imview.getView(), self._scale_bar_ref,
+                              pixel_size_um, display_frame.shape[1])
         self._pixel_inspector.update(display_frame)
         self._apply_colormap(self.cmap_combo.currentText())
         self._update_mask(frame)
@@ -5369,13 +5679,29 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if frame is None:
             QMessageBox.information(self, 'FFT', 'Open a file and load a frame first.')
             return
-        pixel_size_um = None
-        if self._sidecar_objective and self._sidecar_pixel_pitch_um:
-            pixel_size_um = self._sidecar_pixel_pitch_um / self._sidecar_objective
+        pixel_size_um = _resolve_pixel_size_um(
+            self._camera_kind, self._sidecar_objective, self._sidecar_pixel_pitch_um)
         dlg = _FFTDialog(frame, pixel_size_um=pixel_size_um,
                           sensor_pixel_um=self._sidecar_pixel_pitch_um,
                           parent=self, stylesheet=_DARK_STYLE)
         dlg.exec()
+
+    def _open_calibration_dialog(self):
+        frame = self.imview.image
+        if frame is None:
+            QMessageBox.information(self, 'Calibrate Objective',
+                                    'Open a file and load a frame first.')
+            return
+        dlg = _CalibrationDialog(frame, camera_kind=self._camera_kind,
+                                 objective=self._sidecar_objective,
+                                 parent=self, stylesheet=_DARK_STYLE)
+        dlg.exec()
+        # A calibration just saved may change this recording's own pixel
+        # size (if its camera/objective matches), so redraw the scale bar.
+        pixel_size_um = _resolve_pixel_size_um(
+            self._camera_kind, self._sidecar_objective, self._sidecar_pixel_pitch_um)
+        _update_scale_bar(self.imview.getView(), self._scale_bar_ref,
+                          pixel_size_um, frame.shape[1])
 
     def _reveal_recording_folder(self):
         if not self._path:
