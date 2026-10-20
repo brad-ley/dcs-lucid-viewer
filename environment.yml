@@ -8,8 +8,18 @@ dependencies:
   - scipy
   - pip
   - pip:
-    - PyQt6
-    - pyqtgraph
+    # PyQt6 / PyQt6-Qt6 / PyQt6-sip pinned together to a combination verified
+    # working, rather than left to float. These aren't locked to each other
+    # by pip's resolver -- a PC that happens to create this env on a
+    # different day can land on a different PyQt6-Qt6 patch release than the
+    # PyQt6 bindings were tested against, and some patch releases break ABI
+    # compatibility with "DLL load failed ... The specified procedure could
+    # not be found" on import (seen in the wild: PyQt6 6.11.0 + PyQt6-Qt6
+    # 6.11.2 failed outright, while 6.11.0 + 6.11.1 here did not).
+    - PyQt6==6.11.0
+    - PyQt6-Qt6==6.11.1
+    - PyQt6-sip==13.11.1
+    - pyqtgraph==0.14.0
     - tifffile
     - opencv-python
     - pillow
