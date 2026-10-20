@@ -4355,6 +4355,16 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _compute_or_load_pca(self):
         """Load cached PCA basis or compute from white_field frames (async)."""
+        # Entering PCA mode always needs these widgets visible, regardless of
+        # which caller reached this method (combo change and checkbox toggle
+        # go through _on_white_mode_changed(), which already sets this, but
+        # _reload_fields() -- called after every file load and from the
+        # manual folder-picker actions -- calls straight in here without
+        # syncing visibility, which left the PCA settings button hidden even
+        # while PCA mode was actually active and working).
+        self._pca_n_lbl.setVisible(True)
+        self.pca_n_spin.setVisible(True)
+        self._pca_settings_btn.setVisible(True)
         if self._pca_universal:
             self._compute_universal_pca()
             return
@@ -4409,6 +4419,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
                     self._set_white_field_info(folder)
                     self._refresh_current_frame()
+                    self._auto_levels()
                     return
             except Exception as exc:
                 print(f'[pca] cache load error: {exc}')
@@ -5083,6 +5094,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 self._set_dark_field_info()
 
         mode_idx = (self.white_combo.currentIndex() + 1) if self.white_chk.isChecked() else 0
+        if mode_idx != 2:
+            self._pca_n_lbl.setVisible(False)
+            self.pca_n_spin.setVisible(False)
+            self._pca_settings_btn.setVisible(False)
         if mode_idx == 1:
             folder = self._find_field_folder('white_field')
             if folder:
