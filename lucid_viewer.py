@@ -40,6 +40,16 @@ if sys.stderr is None:
 if sys.stdin is None:
     sys.stdin = _NullStream()
 
+# Diagnostic only -- catches fatal aborts/segfaults and prints the actual
+# Python call stack at the moment of the crash (to stderr, which by now is
+# guaranteed usable) instead of leaving us guessing from a bare Event
+# Viewer record. Remove once the PCA-switch crash is root-caused.
+import faulthandler
+try:
+    faulthandler.enable()
+except Exception:
+    pass
+
 import tempfile
 import re
 import json
