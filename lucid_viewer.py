@@ -13,6 +13,24 @@ compute bytes-per-frame and derive the frame count automatically.
 import sys
 import os
 
+# numpy's BLAS backend (MKL/OpenBLAS, under <env>\Library\bin on a
+# conda-forge Windows build) needs to be resolvable by the Windows DLL
+# loader before numpy is imported below. Normally conda's own activate
+# script puts that directory on PATH, but that setup isn't reliable from
+# every shell state -- confirmed crashing (0xc06d007f, inside a BLAS
+# matrix multiply in _apply_pca_correction_frame) when pci_viewer.bat's own
+# "conda activate lucid-viewer" runs in a shell that's never activated any
+# conda env before, while the identical launch works fine from a shell that
+# already has lucid-viewer active. Adding the directory explicitly removes
+# the dependency on PATH/activation history entirely.
+if sys.platform == 'win32':
+    _conda_lib_bin = os.path.join(sys.prefix, 'Library', 'bin')
+    if os.path.isdir(_conda_lib_bin):
+        try:
+            os.add_dll_directory(_conda_lib_bin)
+        except (AttributeError, OSError):
+            pass
+
 # When this script is launched with no console anywhere in its process tree
 # -- notably when HamamatsuOrcaFire/Cpp_CameraControl (Qt C++ apps) open it
 # via QProcess::startDetached("cmd.exe", {"/c", batPath}, ...) -- Python can
