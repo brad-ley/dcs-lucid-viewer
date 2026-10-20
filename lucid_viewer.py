@@ -4365,6 +4365,20 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_n_lbl.setVisible(True)
         self.pca_n_spin.setVisible(True)
         self._pca_settings_btn.setVisible(True)
+
+        # Everything below here is synchronous on the GUI thread up until the
+        # async PcaComputeWorker branch at the bottom -- the folder search
+        # walks the filesystem and reads every candidate folder's sidecars,
+        # and a cache hit still means deserializing a full-resolution
+        # eigenvector array from disk. Both can take a visible moment, and
+        # without an explicit repaint here Qt won't redraw until this method
+        # returns to the event loop, so the UI would otherwise look frozen
+        # with no sign anything is happening until it's already done.
+        self.corr_status_lbl.setText('PCA: locating source folder…')
+        self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+        self._show_corr_progress()
+        QApplication.processEvents()
+
         if self._pca_universal:
             self._compute_universal_pca()
             return
@@ -4372,6 +4386,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         folder = self._find_field_folder(self._pca_field_keywords(), min_frames=2,
                                          sidecar_key='white_pca_folder')
         if folder is None:
+            self._hide_corr_progress()
             self.corr_status_lbl.setText('white_field folder not found')
             self.white_chk.blockSignals(True)
             self.white_chk.setChecked(False)
@@ -4383,6 +4398,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         cache_path = self._pca_cache_path(folder, h, w)
 
         if self._pca_cache_valid(cache_path, folder):
+            self.corr_status_lbl.setText('PCA: loading cached basis…')
+            QApplication.processEvents()
             try:
                 data = np.load(cache_path)
                 mean = data['mean']
@@ -4420,6 +4437,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self._set_white_field_info(folder)
                     self._refresh_current_frame()
                     self._auto_levels()
+                    self._hide_corr_progress()
                     return
             except Exception as exc:
                 print(f'[pca] cache load error: {exc}')
