@@ -2612,12 +2612,14 @@ class _CalibrationDialog(QDialog):
         self._camera_combo = QComboBox()
         self._camera_combo.addItems(['ORCA-Fire', 'Lucid'])
         self._camera_combo.setCurrentIndex(1 if camera_kind == 'lucid' else 0)
+        self._camera_combo.currentIndexChanged.connect(self._refresh_all_line_labels)
         cam_row.addWidget(self._camera_combo)
         cam_row.addWidget(QLabel('Objective (x):'))
         self._objective_spin = QDoubleSpinBox()
         self._objective_spin.setRange(0.1, 1000.0)
         self._objective_spin.setDecimals(2)
         self._objective_spin.setValue(objective if objective else 5.0)
+        self._objective_spin.valueChanged.connect(self._refresh_all_line_labels)
         cam_row.addWidget(self._objective_spin)
         cam_row.addStretch()
         layout.addLayout(cam_row)
@@ -2704,15 +2706,36 @@ class _CalibrationDialog(QDialog):
         roi.sigRegionChanged.connect(lambda _r, e=entry: self._on_line_changed(e))
         self._on_line_changed(entry)
 
+    def _current_pixel_size_um(self):
+        camera_kind = 'lucid' if self._camera_combo.currentIndex() == 1 else 'orcafire'
+        sensor_pitch_um = _LUCID_PIXEL_UM if camera_kind == 'lucid' else _ORCAFIRE_PIXEL_UM
+        return _resolve_pixel_size_um(camera_kind, self._objective_spin.value(), sensor_pitch_um)
+
+    def _refresh_all_line_labels(self, *_args):
+        for entry in self._lines:
+            self._on_line_changed(entry)
+
     def _on_line_changed(self, entry):
-        pts = entry['roi'].listPoints()
-        p0, p1 = pts[0], pts[1]
+        # roi.listPoints() returns handle positions in the ROI's OWN local
+        # coordinate system -- unaffected by dragging the ROI's body (only
+        # handle drags move them). mapToParent() puts them in the same
+        # (view-box) coordinates the label itself lives in, so the label
+        # tracks a whole-line drag too, not just handle drags.
+        roi = entry['roi']
+        pts = roi.listPoints()
+        p0, p1 = roi.mapToParent(pts[0]), roi.mapToParent(pts[1])
         length_px = ((p1.x() - p0.x()) ** 2 + (p1.y() - p0.y()) ** 2) ** 0.5
         entry['length_px'] = length_px
         entry['label'].setPos((p0.x() + p1.x()) / 2.0, (p0.y() + p1.y()) / 2.0)
-        entry['label'].setText(f'{length_px:.1f} px')
+
+        pixel_size_um = self._current_pixel_size_um()
+        if pixel_size_um:
+            text = f'~{_format_length_um(length_px * pixel_size_um)}  ({length_px:.1f} px)'
+        else:
+            text = f'{length_px:.1f} px'
+        entry['label'].setText(text)
         idx = self._lines.index(entry)
-        self._list.item(idx).setText(f'Line {idx + 1}: {length_px:.1f} px')
+        self._list.item(idx).setText(f'Line {idx + 1}: {text}')
 
     def _clear_lines(self):
         view = self._view.getView()

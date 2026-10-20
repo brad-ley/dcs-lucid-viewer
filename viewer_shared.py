@@ -102,6 +102,7 @@ QPushButton { background: #3c3f41; border: 1px solid #555; border-radius: 3px;
 QPushButton:hover   { background: #4c5052; }
 QPushButton:pressed { background: #5c6062; }
 QPushButton:disabled { color: #666; }
+QPushButton:checked { background: #205a7a; border: 1px solid #4fc3f7; color: #eaf6ff; }
 QComboBox {
     background: #3c3f41; border: 1px solid #555; border-radius: 3px; padding: 2px 4px; }
 QMenuBar { background: #2b2b2b; }
