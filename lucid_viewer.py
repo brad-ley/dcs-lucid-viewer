@@ -69,6 +69,7 @@ except Exception:
     pass
 
 import tempfile
+import math
 import re
 import json
 import time
@@ -2527,6 +2528,24 @@ def _format_length_um(length_um):
     return f'{length_um:.2f} µm'
 
 
+def _position_line_label(label, p0, p1, offset_px=14):
+    """Angle a line-length TextItem to match the line and nudge it to one
+    side along the line's normal -- stops the label sitting right on top of
+    (and overlapping) the line it describes."""
+    dx, dy = p1.x() - p0.x(), p1.y() - p0.y()
+    length = (dx ** 2 + dy ** 2) ** 0.5
+    if length > 0:
+        angle = math.degrees(math.atan2(dy, dx))
+        if angle > 90.0 or angle < -90.0:
+            angle += 180.0  # keep the text upright, never upside-down
+        nx, ny = -dy / length, dx / length
+    else:
+        angle, nx, ny = 0.0, 0.0, -1.0
+    label.setAngle(angle)
+    mx, my = (p0.x() + p1.x()) / 2.0, (p0.y() + p1.y()) / 2.0
+    label.setPos(mx + nx * offset_px, my + ny * offset_px)
+
+
 # "Nice" round scale-bar lengths, in micrometers, to choose from so the bar
 # never reads something awkward like "37 um".
 _SCALE_BAR_STEPS_UM = [1, 2, 5, 10, 20, 50, 100, 200, 500,
@@ -2587,7 +2606,7 @@ class _CalibrationDialog(QDialog):
     def __init__(self, frame, camera_kind=None, objective=None,
                  parent=None, stylesheet=''):
         super().__init__(parent)
-        self.setWindowTitle('Calibrate Objective')
+        self.setWindowTitle('Measure/Calibrate')
         self.setMinimumSize(720, 760)
         if stylesheet:
             self.setStyleSheet(stylesheet)
@@ -2698,7 +2717,7 @@ class _CalibrationDialog(QDialog):
     def _finish_line(self, p0, p1):
         roi = pg.LineSegmentROI([p0, p1], pen=pg.mkPen('#ffcc00', width=2))
         self._view.getView().addItem(roi)
-        label = pg.TextItem('', color='#ffcc00', anchor=(0.5, 1))
+        label = pg.TextItem('', color='#ffffff', anchor=(0.5, 0.5))
         self._view.getView().addItem(label)
         entry = {'roi': roi, 'label': label, 'length_px': 0.0}
         self._lines.append(entry)
@@ -2726,7 +2745,7 @@ class _CalibrationDialog(QDialog):
         p0, p1 = roi.mapToParent(pts[0]), roi.mapToParent(pts[1])
         length_px = ((p1.x() - p0.x()) ** 2 + (p1.y() - p0.y()) ** 2) ** 0.5
         entry['length_px'] = length_px
-        entry['label'].setPos((p0.x() + p1.x()) / 2.0, (p0.y() + p1.y()) / 2.0)
+        _position_line_label(entry['label'], p0, p1)
 
         pixel_size_um = self._current_pixel_size_um()
         if pixel_size_um:
@@ -2842,16 +2861,21 @@ class _FFTDialog(QDialog):
             pen=pg.mkPen('#ff5252', width=2))
         self._measure_line.setVisible(False)
         self._src_view.getView().addItem(self._measure_line)
+        # On-canvas label that tracks the line (angled + offset to one side,
+        # same as the Measure/Calibrate tool's lines) rather than a separate
+        # text field, so the reading sits right next to what it measures.
+        self._measure_label = pg.TextItem('', color='#ffffff', anchor=(0.5, 0.5))
+        self._measure_label.setVisible(False)
+        self._src_view.getView().addItem(self._measure_label)
         self._measure_line.sigRegionChanged.connect(self._update_measure_label)
 
         measure_row = QHBoxLayout()
         self._measure_chk = QCheckBox('Measure line (drag the red endpoints)')
         measure_row.addWidget(self._measure_chk)
         measure_row.addStretch()
-        self._measure_lbl = QLabel('')
-        measure_row.addWidget(self._measure_lbl)
         layout.addLayout(measure_row)
         self._measure_chk.toggled.connect(self._measure_line.setVisible)
+        self._measure_chk.toggled.connect(self._measure_label.setVisible)
         self._measure_chk.toggled.connect(self._update_measure_label)
 
         # ── options / action row ─────────────────────────────────────────────────
@@ -2994,16 +3018,17 @@ class _FFTDialog(QDialog):
 
     def _update_measure_label(self, *_args):
         if not self._measure_chk.isChecked():
-            self._measure_lbl.setText('')
             return
-        p1, p2 = self._measure_line.listPoints()
+        pts = self._measure_line.listPoints()
+        p1, p2 = self._measure_line.mapToParent(pts[0]), self._measure_line.mapToParent(pts[1])
         length_px = float(np.hypot(p2.x() - p1.x(), p2.y() - p1.y()))
+        _position_line_label(self._measure_label, p1, p2)
         if self._pixel_size_um:
             length_um = length_px * self._pixel_size_um
-            self._measure_lbl.setText(
-                f'Length: {length_px:.1f} px  (~{_format_length_um(length_um)})')
+            self._measure_label.setText(
+                f'~{_format_length_um(length_um)}  ({length_px:.1f} px)')
         else:
-            self._measure_lbl.setText(f'Length: {length_px:.1f} px')
+            self._measure_label.setText(f'{length_px:.1f} px')
 
     def _export_data(self):
         """Save the radial profile as CSV, plus the full 2D log-power spectrum
@@ -3315,7 +3340,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         fft_act.setStatusTip('Pick a FOV on the current frame and view its 2D FFT')
         fft_act.triggered.connect(self._open_fft_dialog)
         tools_menu.addAction(fft_act)
-        calib_act = QAction('&Calibrate Objective…', self)
+        calib_act = QAction('&Measure/Calibrate…', self)
         calib_act.setStatusTip('Measure a known-length feature to derive real um/pixel')
         calib_act.triggered.connect(self._open_calibration_dialog)
         tools_menu.addAction(calib_act)
@@ -5732,7 +5757,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
     def _open_calibration_dialog(self):
         frame = self.imview.image
         if frame is None:
-            QMessageBox.information(self, 'Calibrate Objective',
+            QMessageBox.information(self, 'Measure/Calibrate',
                                     'Open a file and load a frame first.')
             return
         dlg = _CalibrationDialog(frame, camera_kind=self._camera_kind,
