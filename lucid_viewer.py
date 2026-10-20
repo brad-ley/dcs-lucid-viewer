@@ -333,6 +333,27 @@ class VideoReader:
 
 # ── Sidecar / filename hints ──────────────────────────────────────────────────
 
+def _dbg(*args, **kwargs):
+    """print() that never raises.
+
+    sys.stdout/stderr can be None, or backed by an invalid handle, when this
+    script is launched with no real console attached -- notably when the
+    HamamatsuOrcaFire/Cpp_CameraControl apps open it via
+    QProcess::startDetached("cmd.exe", {"/c", batPath}, ...), which on
+    Windows can leave the child process without a usable console even
+    though cmd.exe itself ran. A bare print() call that then raises
+    (AttributeError on None, OSError/ValueError on a bad handle) escapes
+    whatever "except" block it was logging from -- turning a handled,
+    recoverable error into an unhandled exception in a Qt slot, which PyQt6
+    treats as fatal and aborts the process with no catchable traceback.
+    Every diagnostic print() in this file goes through here instead.
+    """
+    try:
+        print(*args, **kwargs)
+    except Exception:
+        pass
+
+
 def _load_sidecar(path: str):
     """
     Look for a JSON sidecar next to *path* and return (data_dict, status_str).
@@ -1476,7 +1497,7 @@ class PcaComputeWorker(QThread):
                         save_kw['components_low'] = comp_low
                     np.savez_compressed(self._cache_path, **save_kw)
                 except Exception as exc:
-                    print(f'[pca] cache save error: {exc}')
+                    _dbg(f'[pca] cache save error: {exc}')
         except Exception as exc:
             self.pca_error.emit(str(exc))
 
@@ -1544,7 +1565,7 @@ class PcaComputeWorker(QThread):
                         for j in indices:
                             frames.append(data[j].astype(np.float32))
             except Exception as e:
-                print(f'[pca] error loading {fname}: {e}')
+                _dbg(f'[pca] error loading {fname}: {e}')
         return frames
 
 
@@ -1691,7 +1712,7 @@ class FieldLoadWorker(QThread):
                 data = tifffile.imread(fpath)
                 return data.astype(np.float32) if data.ndim == 2 else data[0].astype(np.float32)
         except Exception as e:
-            print(f'[field] error loading {target}: {e}')
+            _dbg(f'[field] error loading {target}: {e}')
             return None
 
 
@@ -3823,7 +3844,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 if min_frames <= 1 or self._count_white_field_frames(stored) >= min_frames:
                     return stored
             else:
-                print(f'[field] stored ref {stored!r} shape {shape} != target {(tw,th)}, ignoring')
+                _dbg(f'[field] stored ref {stored!r} shape {shape} != target {(tw,th)}, ignoring')
 
         # --- timestamp-proximity search ---
         parent = os.path.dirname(self._path)
@@ -3861,7 +3882,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             for name in candidates:
                 folder = os.path.join(search_dir, name)
                 if min_frames > 1 and self._count_white_field_frames(folder) < min_frames:
-                    print(f'[field] skipping {name!r}: fewer than {min_frames} frames')
+                    _dbg(f'[field] skipping {name!r}: fewer than {min_frames} frames')
                     continue
                 shape  = self._field_folder_shape(folder)
                 if shape is None:
@@ -3871,7 +3892,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     shape_match = folder
                     break
                 else:
-                    print(f'[field] skipping {name!r}: shape {shape} != {(tw,th)}')
+                    _dbg(f'[field] skipping {name!r}: shape {shape} != {(tw,th)}')
             result = shape_match or unknown_shape
             if result:
                 return result
@@ -3882,7 +3903,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         try:
             all_files = sorted(os.listdir(folder))
         except OSError as e:
-            print(f'[field] listdir error on {folder!r}: {e}')
+            _dbg(f'[field] listdir error on {folder!r}: {e}')
             return None
 
         raw_candidates  = [f for f in all_files if os.path.splitext(f)[1].lower() == '.raw']
@@ -3893,13 +3914,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if raw_candidates:
             files = raw_candidates
             if tiff_candidates:
-                print(f'[field] skipping {len(tiff_candidates)} TIFF(s) — RAW files take precedence')
+                _dbg(f'[field] skipping {len(tiff_candidates)} TIFF(s) — RAW files take precedence')
         else:
             files = tiff_candidates
 
-        print(f'[field] files to load from {folder!r}: {files}')
+        _dbg(f'[field] files to load from {folder!r}: {files}')
         if not files:
-            print('[field] no matching files found')
+            _dbg('[field] no matching files found')
             return None
 
         # Viewer-current settings used as fallback if a file has no sidecar.
@@ -3915,7 +3936,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         frames = []
         for fname in files:
             if len(frames) >= MAX_FIELD_FRAMES:
-                print(f'[field] hit {MAX_FIELD_FRAMES}-frame cap; skipping remaining files')
+                _dbg(f'[field] hit {MAX_FIELD_FRAMES}-frame cap; skipping remaining files')
                 break
             fpath = os.path.join(folder, fname)
             ext   = os.path.splitext(fname)[1].lower()
@@ -3931,16 +3952,16 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     else:
                         fmt = default_fmt
                         if not sidecar:
-                            print(f'[field] WARNING: no sidecar for {fname} '
+                            _dbg(f'[field] WARNING: no sidecar for {fname} '
                                   f'({sidecar_status}); falling back to viewer '
                                   f'format {fmt!r}. Decoding may be wrong.')
                         else:
-                            print(f'[field] WARNING: sidecar for {fname} has no '
+                            _dbg(f'[field] WARNING: sidecar for {fname} has no '
                                   f'pixel_format key (found: {list(sidecar.keys())}); '
                                   f'falling back to viewer format {fmt!r}.')
                     w = int(sidecar.get('width',  default_w))
                     h = int(sidecar.get('height', default_h))
-                    print(f'[field]   {fname}: fmt={fmt!r}, {w}x{h}  [{sidecar_status}]')
+                    _dbg(f'[field]   {fname}: fmt={fmt!r}, {w}x{h}  [{sidecar_status}]')
                     r = RawReader(fpath, fmt, w, h,
                                   inverse_lut=_sqrt_inverse_lut_from_sidecar(sidecar))
                     n_file = len(r)
@@ -3949,7 +3970,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                         indices = range(n_file)
                     else:
                         indices = [int(k * n_file / budget) for k in range(budget)]
-                        print(f'[field]   {fname}: subsampling {n_file} → {len(indices)} frames')
+                        _dbg(f'[field]   {fname}: subsampling {n_file} → {len(indices)} frames')
                     for i in indices:
                         frames.append(r[i].astype(np.float32))
                     r.close()
@@ -3965,18 +3986,18 @@ class LucidViewer(ViewerMixin, QMainWindow):
                             indices = range(n_file)
                         else:
                             indices = [int(k * n_file / budget) for k in range(budget)]
-                            print(f'[field]   {fname}: subsampling {n_file} → {len(indices)} frames')
+                            _dbg(f'[field]   {fname}: subsampling {n_file} → {len(indices)} frames')
                         for i in indices:
                             frames.append(data[i].astype(np.float32))
-                print(f'[field]   loaded {fname}: {len(frames)} frames so far')
+                _dbg(f'[field]   loaded {fname}: {len(frames)} frames so far')
             except Exception as e:
-                print(f'[field]   ERROR loading {fname}: {e}')
+                _dbg(f'[field]   ERROR loading {fname}: {e}')
                 continue
 
         if not frames:
-            print('[field] no frames loaded after reading all files')
+            _dbg('[field] no frames loaded after reading all files')
             return None
-        print(f'[field] averaging {len(frames)} frames, shape {frames[0].shape}')
+        _dbg(f'[field] averaging {len(frames)} frames, shape {frames[0].shape}')
         return np.mean(frames, axis=0).astype(np.float32)
 
     def _read_average_gain(self, folder: str):
@@ -4331,7 +4352,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                         for i in range(data.shape[0]):
                             frames.append(data[i].astype(np.float32))
             except Exception as e:
-                print(f'[pca] error loading {fname}: {e}')
+                _dbg(f'[pca] error loading {fname}: {e}')
         return frames
 
     def _pca_cache_path(self, folder, h, w):
@@ -4374,10 +4395,18 @@ class LucidViewer(ViewerMixin, QMainWindow):
         # without an explicit repaint here Qt won't redraw until this method
         # returns to the event loop, so the UI would otherwise look frozen
         # with no sign anything is happening until it's already done.
+        # repaint(), not processEvents() -- processEvents() pumps the WHOLE
+        # Qt event queue, including any other pending signal (a queued
+        # click, a timer), which can re-enter this method (or touch
+        # self._pca_mean/_pca_components) while they're mid-assignment a few
+        # lines below and crash natively with no catchable traceback.
+        # repaint() only redraws these two widgets, synchronously, with no
+        # other event processing.
         self.corr_status_lbl.setText('PCA: locating source folder…')
         self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
         self._show_corr_progress()
-        QApplication.processEvents()
+        self.corr_status_lbl.repaint()
+        self._corr_progress.repaint()
 
         if self._pca_universal:
             self._compute_universal_pca()
@@ -4399,7 +4428,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
         if self._pca_cache_valid(cache_path, folder):
             self.corr_status_lbl.setText('PCA: loading cached basis…')
-            QApplication.processEvents()
+            self.corr_status_lbl.repaint()
             try:
                 data = np.load(cache_path)
                 mean = data['mean']
@@ -4440,7 +4469,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self._hide_corr_progress()
                     return
             except Exception as exc:
-                print(f'[pca] cache load error: {exc}')
+                _dbg(f'[pca] cache load error: {exc}')
 
         # Load frames and compute PCA fully asynchronously
         fmt = self.fmt_combo.currentText()
@@ -4606,7 +4635,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self._launch_cell_adapt_worker(mu, comp, mu_low, comp_low)
                     return
             except Exception as exc:
-                print(f'[pca] master cache load error: {exc}')
+                _dbg(f'[pca] master cache load error: {exc}')
 
         # Compute master PCA from scratch.
         fmt = self.fmt_combo.currentText()
