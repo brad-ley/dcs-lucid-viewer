@@ -38,10 +38,22 @@ exit /b 1
 for %%i in ("%CONDA%\..\..") do set "CONDA_ROOT=%%~fi"
 set "PYTHON=%CONDA_ROOT%\envs\%ENV_NAME%\python.exe"
 
-:: ── Create environment if missing ─────────────────────────────────────────────
+:: ── Create environment if missing, update it if environment.yml changed ───────
+:: The stamp is a copy of the environment.yml last applied to this PC's env, so
+:: new dependencies reach existing installs without a slow update every launch.
+set "ENV_YML=Z:\6. Software\prod_code\LucidVisionCamera\environment.yml"
+set "ENV_STAMP=%CONDA_ROOT%\envs\%ENV_NAME%\.lucid_viewer_environment.yml"
 IF NOT EXIST "%PYTHON%" (
     echo Environment %ENV_NAME% not found. Creating from environment.yml...
-    CALL "%CONDA%" env create -n %ENV_NAME% -f "Z:\6. Software\prod_code\LucidVisionCamera\environment.yml"
+    CALL "%CONDA%" env create -n %ENV_NAME% -f "%ENV_YML%"
+    IF NOT ERRORLEVEL 1 copy /y "%ENV_YML%" "%ENV_STAMP%" >nul
+) ELSE (
+    fc /b "%ENV_YML%" "%ENV_STAMP%" >nul 2>&1
+    IF ERRORLEVEL 1 (
+        echo environment.yml changed -- updating %ENV_NAME%, this may take several minutes...
+        CALL "%CONDA%" env update -n %ENV_NAME% -f "%ENV_YML%"
+        IF NOT ERRORLEVEL 1 copy /y "%ENV_YML%" "%ENV_STAMP%" >nul
+    )
 )
 
 :: ── Activate, don't just invoke python.exe by path ───────────────────────────
