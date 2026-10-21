@@ -2580,21 +2580,28 @@ def _nice_scale_bar_length_um(view_width_um):
     return chosen
 
 
-def _update_scale_bar(view_box, bar_ref, pixel_size_um, image_width_px):
-    """Add/replace a bottom-right scale bar on `view_box`. `bar_ref` is a
-    single-element list holding the current pg.ScaleBar (or None), so this
-    can be called repeatedly (new file, new calibration) without stacking
-    bars. Removes any existing bar and draws nothing if pixel_size_um or
-    image_width_px is unknown."""
+def _update_scale_bar(view_box, bar_ref, pixel_size_um):
+    """Add/replace a bottom-right scale bar on `view_box`, sized off the
+    CURRENTLY VISIBLE width (view_box.viewRange()), not the full image --
+    so it keeps reading a sensible length as you zoom in/out, not just at
+    the initial fit-to-window view. `bar_ref` is a single-element list
+    holding the current pg.ScaleBar (or None), so this can be called
+    repeatedly (new file, new calibration, zoom/pan) without stacking bars.
+    Removes any existing bar and draws nothing if pixel_size_um is unknown
+    or the view has no visible extent yet."""
     if bar_ref[0] is not None:
         try:
             bar_ref[0].setParentItem(None)
         except Exception:
             pass
         bar_ref[0] = None
-    if not pixel_size_um or not image_width_px:
+    if not pixel_size_um:
         return
-    width_um = image_width_px * pixel_size_um
+    (x0, x1), _y_range = view_box.viewRange()
+    visible_width_px = abs(x1 - x0)
+    if visible_width_px <= 0:
+        return
+    width_um = visible_width_px * pixel_size_um
     length_um = _nice_scale_bar_length_um(width_um)
     length_px = length_um / pixel_size_um
     label = f'{length_um/1000:g} mm' if length_um >= 1000 else f'{length_um:g} \u00b5m'
@@ -2603,6 +2610,15 @@ def _update_scale_bar(view_box, bar_ref, pixel_size_um, image_width_px):
     bar.setParentItem(view_box)
     bar.anchor((1, 1), (1, 1), offset=(-20, -20))
     bar_ref[0] = bar
+
+
+def _connect_scale_bar_autoscale(view_box, bar_ref, pixel_size_getter):
+    """Keep a scale bar sized to the visible field as the user zooms/pans.
+    `pixel_size_getter` is called fresh on every range change (rather than
+    passing a fixed value) since the current recording/calibration can
+    change without the view itself re-emitting a range change."""
+    view_box.sigRangeChanged.connect(
+        lambda *_a: _update_scale_bar(view_box, bar_ref, pixel_size_getter()))
 
 
 class _CalibrationDialog(QDialog):
@@ -2966,8 +2982,9 @@ class _FFTDialog(QDialog):
         self._src_view.setImage(self._frame, levels=src_levels, autoHistogramRange=False)
         apply_colormap_to_view(self._src_view, self._cmap)
         self._scale_bar_ref = [None]
-        _update_scale_bar(self._src_view.getView(), self._scale_bar_ref,
-                          pixel_size_um, self._frame.shape[1])
+        _update_scale_bar(self._src_view.getView(), self._scale_bar_ref, pixel_size_um)
+        _connect_scale_bar_autoscale(self._src_view.getView(), self._scale_bar_ref,
+                                    lambda: self._pixel_size_um)
         self._compute_fft()
 
     # ── FFT computation ───────────────────────────────────────────────────────
@@ -3593,6 +3610,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._mask_item = pg.ImageItem()
         self._mask_item.setZValue(10)
         self.imview.getView().addItem(self._mask_item)
+        _connect_scale_bar_autoscale(
+            self.imview.getView(), self._scale_bar_ref,
+            lambda: _resolve_pixel_size_um(
+                self._camera_kind, self._sidecar_objective, self._sidecar_pixel_pitch_um))
 
         # Frame slider (for lazy loading; hides pyqtgraph's built-in timeline
         # when the full stack is not loaded)
@@ -4071,8 +4092,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             # depends on which file/objective is open, not the frame index.
             pixel_size_um = _resolve_pixel_size_um(
                 self._camera_kind, self._sidecar_objective, self._sidecar_pixel_pitch_um)
-            _update_scale_bar(self.imview.getView(), self._scale_bar_ref,
-                              pixel_size_um, display_frame.shape[1])
+            _update_scale_bar(self.imview.getView(), self._scale_bar_ref, pixel_size_um)
         self._pixel_inspector.update(display_frame)
         self._apply_colormap(self.cmap_combo.currentText())
         self._update_mask(frame)
@@ -5772,8 +5792,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         # size (if its camera/objective matches), so redraw the scale bar.
         pixel_size_um = _resolve_pixel_size_um(
             self._camera_kind, self._sidecar_objective, self._sidecar_pixel_pitch_um)
-        _update_scale_bar(self.imview.getView(), self._scale_bar_ref,
-                          pixel_size_um, frame.shape[1])
+        _update_scale_bar(self.imview.getView(), self._scale_bar_ref, pixel_size_um)
 
     def _reveal_recording_folder(self):
         if not self._path:
