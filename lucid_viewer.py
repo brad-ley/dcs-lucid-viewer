@@ -797,22 +797,23 @@ def _field_correct_float(frame, dark, white,
     return out.astype(np.float32)
 
 
-def _auto_pca_n(explained: np.ndarray) -> int:
-    """Scree-plot elbow: first i where explained[i] <= 1.1 * explained[i+1]; use i components.
+_PCA_AUTO_VARIANCE_TARGET = 0.90
 
-    1.1 (not the looser 1.5 this used to be) because 1.5 fires on the very
-    first comparison (i=0) whenever the curve decays gradually from the
-    start rather than dropping sharply after 1-2 dominant components --
-    e.g. [12%, 11%, 10%, 9%, ...] has no real two-component elbow, but
-    12 <= 1.5*11 is already true, so it always returned n=1. A tighter
-    ratio means only a genuinely flat run of near-equal components stops
-    the search, so a gradually-decaying curve keeps more of its real
-    signal before hitting the noise tail.
-    """
-    for i in range(len(explained) - 1):
-        if explained[i] <= 1.1 * explained[i + 1]:
-            return max(1, i)
-    return max(1, len(explained))
+
+def _auto_pca_n(explained: np.ndarray) -> int:
+    """Smallest n whose first n components explain at least
+    _PCA_AUTO_VARIANCE_TARGET (90%) of total variance, capped at however
+    many components were actually trained/stored. Replaces an earlier
+    scree-plot-elbow (consecutive-ratio) heuristic that was unreliable: it
+    fired on the very first comparison whenever the curve decayed
+    gradually from the start rather than dropping sharply after 1-2
+    dominant components, so it tended to return n=1 regardless of how
+    much real signal the later components still carried."""
+    cumulative = np.cumsum(explained)
+    over = np.flatnonzero(cumulative >= _PCA_AUTO_VARIANCE_TARGET)
+    if len(over) == 0:
+        return max(1, len(explained))
+    return max(1, int(over[0]) + 1)
 
 
 @functools.lru_cache(maxsize=16)
