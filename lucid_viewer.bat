@@ -44,5 +44,22 @@ IF NOT EXIST "%PYTHON%" (
     CALL "%CONDA%" env create -n %ENV_NAME% -f "Z:\6. Software\prod_code\LucidVisionCamera\environment.yml"
 )
 
+:: ── Activate, don't just invoke python.exe by path ───────────────────────────
+:: Conda-forge packages (numpy/OpenBLAS among them) ship activate.d hook
+:: scripts that set environment variables Windows DLL loading depends on --
+:: notably CONDA_DLL_SEARCH_MODIFICATION_ENABLE, which works around a
+:: Windows DLL-search-order change that otherwise silently breaks resolving
+:: a conda-forge package's own Library\bin DLLs. Invoking "%PYTHON%" by its
+:: full path (as this used to) skips all of that, and was traced to a
+:: numpy/OpenBLAS crash (0xc06d007f) during the PCA correction's matrix
+:: multiply that only reproduced in a shell where conda activate had never
+:: run -- i.e. exactly this launcher's own usual invocation pattern.
+CALL "%CONDA%" activate %ENV_NAME%
+IF ERRORLEVEL 1 (
+    echo ERROR: failed to activate conda environment %ENV_NAME%.
+    pause
+    exit /b 1
+)
+
 :: ── Launch viewer ─────────────────────────────────────────────────────────────
-"%PYTHON%" "%SCRIPT%" %*
+python "%SCRIPT%" %*

@@ -17,7 +17,64 @@ from viewer_runtime import prepare_qt_runtime
 # Qt must resolve Windows ICU before conda's native libraries are loaded.
 prepare_qt_runtime()
 
+
+# numpy's BLAS backend (MKL/OpenBLAS, under <env>\Library\bin on a
+# conda-forge Windows build) needs to be resolvable by the Windows DLL
+# loader before numpy is imported below. Normally conda's own activate
+# script puts that directory on PATH, but that setup isn't reliable from
+# every shell state -- confirmed crashing (0xc06d007f, inside a BLAS
+# matrix multiply in _apply_pca_correction_frame) when pci_viewer.bat's own
+# "conda activate lucid-viewer" runs in a shell that's never activated any
+# conda env before, while the identical launch works fine from a shell that
+# already has lucid-viewer active. Adding the directory explicitly removes
+# the dependency on PATH/activation history entirely.
+if sys.platform == 'win32':
+    _conda_lib_bin = os.path.join(sys.prefix, 'Library', 'bin')
+    if os.path.isdir(_conda_lib_bin):
+        try:
+            _conda_dll_directory = os.add_dll_directory(_conda_lib_bin)
+        except (AttributeError, OSError):
+            pass
+
+# When this script is launched with no console anywhere in its process tree
+# -- notably when HamamatsuOrcaFire/Cpp_CameraControl (Qt C++ apps) open it
+# via QProcess::startDetached("cmd.exe", {"/c", batPath}, ...) -- Python can
+# end up with sys.stdout/stderr/stdin as None or backed by no real handle.
+# CPython's stdio is initialized lazily, so this doesn't fail at launch; it
+# surfaces the first time ANYTHING tries to write to one of them, which
+# isn't only our own code -- e.g. a numpy RuntimeWarning (divide-by-zero in
+# the PCA correction math) goes through the stdlib warnings module straight
+# to sys.stderr, with no try/except of ours anywhere on that path. That
+# failure is fatal: it happens deep enough in interpreter machinery that
+# Python aborts the whole process (0xc06d007f in KERNELBASE.dll is the CRT
+# abort() signature, not a plain access violation) rather than raising
+# something catchable in our code. Patching in no-op streams up front --
+# before any other import that might warn or print -- closes this off
+# regardless of which library tries to write.
+class _NullStream:
+    def write(self, *a, **k): pass
+    def flush(self, *a, **k): pass
+    def isatty(self): return False
+
+if sys.stdout is None:
+    sys.stdout = _NullStream()
+if sys.stderr is None:
+    sys.stderr = _NullStream()
+if sys.stdin is None:
+    sys.stdin = _NullStream()
+
+# Diagnostic only -- catches fatal aborts/segfaults and prints the actual
+# Python call stack at the moment of the crash (to stderr, which by now is
+# guaranteed usable) instead of leaving us guessing from a bare Event
+# Viewer record. Remove once the PCA-switch crash is root-caused.
+import faulthandler
+try:
+    faulthandler.enable()
+except Exception:
+    pass
+
 import tempfile
+import math
 import re
 import json
 import time
@@ -35,10 +92,12 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon
-from PyQt6.QtGui import QDesktopServices, QPainter, QColor, QPen
+from PyQt6.QtGui import QDesktopServices, QPainter, QColor, QPen, QFont
 
 import pyqtgraph as pg
-from viewer_shared import COLORMAPS, _build_pixel_mask, ViewerMixin, _DARK_STYLE_BASE
+from viewer_shared import (COLORMAPS, _build_pixel_mask, ViewerMixin, _DARK_STYLE_BASE,
+                           get_colormap, apply_colormap_to_view,
+                           _update_scale_bar, _connect_scale_bar_autoscale)
 from median_white_field import correct_median_white, median_plan, MedianCancelled
 from spatial_calibration import (
     SpatialCalibration, LineDrawingViewBox, MeasurementOverlay, SetScaleDialog,
@@ -341,6 +400,27 @@ class VideoReader:
 
 
 # ── Sidecar / filename hints ──────────────────────────────────────────────────
+
+def _dbg(*args, **kwargs):
+    """print() that never raises.
+
+    sys.stdout/stderr can be None, or backed by an invalid handle, when this
+    script is launched with no real console attached -- notably when the
+    HamamatsuOrcaFire/Cpp_CameraControl apps open it via
+    QProcess::startDetached("cmd.exe", {"/c", batPath}, ...), which on
+    Windows can leave the child process without a usable console even
+    though cmd.exe itself ran. A bare print() call that then raises
+    (AttributeError on None, OSError/ValueError on a bad handle) escapes
+    whatever "except" block it was logging from -- turning a handled,
+    recoverable error into an unhandled exception in a Qt slot, which PyQt6
+    treats as fatal and aborts the process with no catchable traceback.
+    Every diagnostic print() in this file goes through here instead.
+    """
+    try:
+        print(*args, **kwargs)
+    except Exception:
+        pass
+
 
 def _load_sidecar(path: str):
     """
@@ -1519,7 +1599,7 @@ class PcaComputeWorker(QThread):
                         save_kw['components_low'] = comp_low
                     np.savez_compressed(self._cache_path, **save_kw)
                 except Exception as exc:
-                    print(f'[pca] cache save error: {exc}')
+                    _dbg(f'[pca] cache save error: {exc}')
         except Exception as exc:
             self.pca_error.emit(str(exc))
 
@@ -1587,7 +1667,7 @@ class PcaComputeWorker(QThread):
                         for j in indices:
                             frames.append(data[j].astype(np.float32))
             except Exception as e:
-                print(f'[pca] error loading {fname}: {e}')
+                _dbg(f'[pca] error loading {fname}: {e}')
         return frames
 
 
@@ -1763,7 +1843,7 @@ class FieldLoadWorker(QThread):
                 data = tifffile.imread(fpath)
                 return data.astype(np.float32) if data.ndim == 2 else data[0].astype(np.float32)
         except Exception as e:
-            print(f'[field] error loading {target}: {e}')
+            _dbg(f'[field] error loading {target}: {e}')
             return None
 
 
@@ -2202,9 +2282,17 @@ class _PcaSettingsDialog(QDialog):
 # ── PCA eigenvector viewer ────────────────────────────────────────────────────
 
 class _PcaTemporalWeightWorker(QThread):
-    """Compute per-frame projection coefficients for ALL PCA components in one pass."""
+    """Compute per-frame projection coefficients for ALL PCA components in one pass.
+
+    This is a diagnostic, not a quantitative result, so a long recording
+    (e.g. 30s at 82 Hz = ~2460 frames, full-frame) is subsampled evenly down
+    to at most MAX_FRAMES frames rather than walking every single one --
+    full coverage buys little here and costs a lot of wall-clock time.
+    """
+    MAX_FRAMES = 250
+
     progress = pyqtSignal(int)
-    done     = pyqtSignal(object)   # np.ndarray shape (n_components, n_frames)
+    done     = pyqtSignal(object, object)   # (n_components, n_sampled) coeffs, sampled frame indices
     error    = pyqtSignal(str)
 
     def __init__(self, components, mean, reader, parent=None):
@@ -2217,15 +2305,21 @@ class _PcaTemporalWeightWorker(QThread):
         try:
             n_frames = len(self._reader)
             n_comp   = self._comps.shape[0]
-            coeffs   = np.empty((n_comp, n_frames), dtype=np.float32)
-            report_every = max(1, n_frames // 100)
-            for i in range(n_frames):
-                frame      = self._reader[i].astype(np.float32).ravel()
+            if n_frames > self.MAX_FRAMES:
+                indices = np.linspace(0, n_frames - 1, self.MAX_FRAMES).round().astype(np.int64)
+                indices = np.unique(indices)
+            else:
+                indices = np.arange(n_frames, dtype=np.int64)
+            n_sampled = len(indices)
+            coeffs   = np.empty((n_comp, n_sampled), dtype=np.float32)
+            report_every = max(1, n_sampled // 100)
+            for i, frame_idx in enumerate(indices):
+                frame      = self._reader[int(frame_idx)].astype(np.float32).ravel()
                 coeffs[:, i] = self._comps @ (frame - self._mean)
                 if i % report_every == 0:
-                    self.progress.emit(int(100 * i / n_frames))
+                    self.progress.emit(int(100 * i / n_sampled))
             self.progress.emit(100)
-            self.done.emit(coeffs)
+            self.done.emit(coeffs, indices)
         except Exception as exc:
             self.error.emit(str(exc))
 
@@ -2235,7 +2329,7 @@ class _PcaEigenvectorDialog(QDialog):
 
     def __init__(self, components, mean, shape, explained,
                  reader, timestamps, ts_unit,
-                 parent=None, stylesheet=''):
+                 parent=None, stylesheet='', cmap=None):
         super().__init__(parent)
         self.setWindowTitle('PCA Eigenvector Viewer')
         self.setMinimumSize(720, 560)
@@ -2249,9 +2343,10 @@ class _PcaEigenvectorDialog(QDialog):
         self._reader        = reader
         self._timestamps    = timestamps   # (n_frames,) float64 or None
         self._ts_unit       = ts_unit or ''
-        self._weight_worker = None
-        self._all_coeffs    = None   # (n_components, n_frames) once computed
-        self._current_idx   = 0
+        self._weight_worker  = None
+        self._all_coeffs     = None   # (n_components, n_sampled) once computed
+        self._sample_indices = None   # (n_sampled,) frame indices into the recording
+        self._current_idx    = 0
         n = components.shape[0]
 
         layout = QVBoxLayout(self)
@@ -2264,6 +2359,7 @@ class _PcaEigenvectorDialog(QDialog):
         self._img_view.ui.menuBtn.hide()
         self._img_view.setMinimumHeight(280)
         layout.addWidget(self._img_view)
+        apply_colormap_to_view(self._img_view, cmap)
 
         # ── component slider ──────────────────────────────────────────────────
         slider_row = QHBoxLayout()
@@ -2367,25 +2463,28 @@ class _PcaEigenvectorDialog(QDialog):
         self._weight_worker.error.connect(self._on_weights_error)
         self._weight_worker.start()
 
-    def _on_weights_done(self, all_coeffs):
-        # all_coeffs: (n_components, n_frames)
-        self._weight_worker = None
-        self._all_coeffs    = all_coeffs
+    def _on_weights_done(self, all_coeffs, sample_indices):
+        # all_coeffs: (n_components, n_sampled); sample_indices: (n_sampled,)
+        # frame indices into the original recording (subsampled, see
+        # _PcaTemporalWeightWorker.MAX_FRAMES).
+        self._weight_worker  = None
+        self._all_coeffs     = all_coeffs
+        self._sample_indices = sample_indices
         self._weight_btn.setEnabled(True)
         self._weight_btn.setText('Recompute temporal weights')
         self._weight_prog.setVisible(False)
         self._update_weight_plot(self._current_idx)
 
     def _update_weight_plot(self, idx):
-        coeffs = self._all_coeffs[idx]
-        n      = self._components.shape[0]
+        coeffs  = self._all_coeffs[idx]
+        indices = self._sample_indices
+        n       = self._components.shape[0]
 
-        if (self._timestamps is not None
-                and len(self._timestamps) == len(coeffs)):
-            x     = self._timestamps
+        if self._timestamps is not None and len(self._timestamps) > indices.max():
+            x     = self._timestamps[indices]
             x_lbl = f'Time ({self._ts_unit})' if self._ts_unit else 'Time'
         else:
-            x     = np.arange(len(coeffs), dtype=np.float32)
+            x     = indices.astype(np.float32)
             x_lbl = 'Frame'
 
         self._plot.setLabel('bottom', x_lbl)
@@ -2416,6 +2515,47 @@ class _PcaEigenvectorDialog(QDialog):
 _ORCAFIRE_PIXEL_UM = 4.6
 _LUCID_PIXEL_UM    = 2.74
 
+# ── Physical length labels and adaptive scale bars ───────────────────────────
+
+def _format_length_um(length_um):
+    """Auto-scaled length string: um below 1 mm, mm at or above it -- objectives
+    here span 2x-20x, so a measured/calibration length can land anywhere from
+    single-digit um to several mm depending on which one's in use."""
+    if length_um >= 1000.0:
+        return f'{length_um / 1000.0:.3f} mm'
+    return f'{length_um:.2f} µm'
+
+
+def _line_label_font():
+    # Built lazily (not at import time) since QFont needs a QApplication.
+    font = QFont()
+    font.setPointSize(12)
+    font.setBold(True)
+    return font
+
+
+def _position_line_label(label, p0, p1, offset_px=14):
+    """Angle a line-length TextItem to match the line and nudge it to one
+    side along the line's normal -- stops the label sitting right on top of
+    (and overlapping) the line it describes."""
+    dx, dy = p1.x() - p0.x(), p1.y() - p0.y()
+    length = (dx ** 2 + dy ** 2) ** 0.5
+    if length > 0:
+        angle = math.degrees(math.atan2(dy, dx))
+        if angle > 90.0 or angle < -90.0:
+            angle += 180.0  # keep the text upright, never upside-down
+        nx, ny = -dy / length, dx / length
+    else:
+        angle, nx, ny = 0.0, 0.0, -1.0
+    # TextItem.setAngle() is counter-clockwise from the parent's x axis, but
+    # this view's y axis is inverted (row-major images), so the angle has to
+    # be negated to actually line up with the line -- otherwise cardinal
+    # angles look fine (a line is symmetric under +180) but anything in
+    # between, e.g. 45 degrees, renders rotated a full 90 degrees off.
+    label.setAngle(-angle)
+    mx, my = (p0.x() + p1.x()) / 2.0, (p0.y() + p1.y()) / 2.0
+    label.setPos(mx + nx * offset_px, my + ny * offset_px)
+
 
 class _FFTDialog(QDialog):
     """Non-modal dialog: pick a rectangular FOV on the current frame and inspect
@@ -2425,13 +2565,14 @@ class _FFTDialog(QDialog):
     in real units (cycles/um); otherwise it falls back to cycles/pixel."""
 
     def __init__(self, frame, pixel_size_um=None, sensor_pixel_um=None,
-                 parent=None, stylesheet=''):
+                 parent=None, stylesheet='', cmap=None):
         super().__init__(parent)
         self.setWindowTitle('Spatial Frequency (FFT) Viewer')
         self.setMinimumSize(760, 760)
         if stylesheet:
             self.setStyleSheet(stylesheet)
 
+        self._cmap = cmap
         self._frame = np.asarray(frame)
         self._pixel_size_um = pixel_size_um
         # Scale factor applied to cycles/pixel to get the displayed unit.
@@ -2475,16 +2616,22 @@ class _FFTDialog(QDialog):
             pen=pg.mkPen('#ff5252', width=2))
         self._measure_line.setVisible(False)
         self._src_view.getView().addItem(self._measure_line)
+        # On-canvas label that tracks the line (angled + offset to one side,
+        # same as the Measure/Calibrate tool's lines) rather than a separate
+        # text field, so the reading sits right next to what it measures.
+        self._measure_label = pg.TextItem('', color='#ffffff', anchor=(0.5, 0.5))
+        self._measure_label.setFont(_line_label_font())
+        self._measure_label.setVisible(False)
+        self._src_view.getView().addItem(self._measure_label)
         self._measure_line.sigRegionChanged.connect(self._update_measure_label)
 
         measure_row = QHBoxLayout()
         self._measure_chk = QCheckBox('Measure line (drag the red endpoints)')
         measure_row.addWidget(self._measure_chk)
         measure_row.addStretch()
-        self._measure_lbl = QLabel('')
-        measure_row.addWidget(self._measure_lbl)
         layout.addLayout(measure_row)
         self._measure_chk.toggled.connect(self._measure_line.setVisible)
+        self._measure_chk.toggled.connect(self._measure_label.setVisible)
         self._measure_chk.toggled.connect(self._update_measure_label)
 
         # ── options / action row ─────────────────────────────────────────────────
@@ -2554,6 +2701,11 @@ class _FFTDialog(QDialog):
 
         src_levels = self._pct_levels(self._frame, 2, 98)
         self._src_view.setImage(self._frame, levels=src_levels, autoHistogramRange=False)
+        apply_colormap_to_view(self._src_view, self._cmap)
+        self._scale_bar_ref = [None]
+        _update_scale_bar(self._src_view.getView(), self._scale_bar_ref, pixel_size_um)
+        _connect_scale_bar_autoscale(self._src_view.getView(), self._scale_bar_ref,
+                                    lambda: self._pixel_size_um)
         self._compute_fft()
 
     # ── FFT computation ───────────────────────────────────────────────────────
@@ -2585,6 +2737,7 @@ class _FFTDialog(QDialog):
         log_power = np.log1p(power)
         levels = self._pct_levels(log_power, 2, 98)
         self._fft_view.setImage(log_power, levels=levels, autoHistogramRange=False)
+        apply_colormap_to_view(self._fft_view, self._cmap)
 
         # Azimuthal average of the power spectrum vs. spatial frequency
         # (computed in cycles/pixel, Nyquist = 0.5, then rescaled for display).
@@ -2624,16 +2777,17 @@ class _FFTDialog(QDialog):
 
     def _update_measure_label(self, *_args):
         if not self._measure_chk.isChecked():
-            self._measure_lbl.setText('')
             return
-        p1, p2 = self._measure_line.listPoints()
+        pts = self._measure_line.listPoints()
+        p1, p2 = self._measure_line.mapToParent(pts[0]), self._measure_line.mapToParent(pts[1])
         length_px = float(np.hypot(p2.x() - p1.x(), p2.y() - p1.y()))
+        _position_line_label(self._measure_label, p1, p2)
         if self._pixel_size_um:
             length_um = length_px * self._pixel_size_um
-            self._measure_lbl.setText(
-                f'Length: {length_px:.1f} px  (~{length_um:.2f} µm)')
+            self._measure_label.setText(
+                f'~{_format_length_um(length_um)}  ({length_px:.1f} px)')
         else:
-            self._measure_lbl.setText(f'Length: {length_px:.1f} px')
+            self._measure_label.setText(f'{length_px:.1f} px')
 
     def _export_data(self):
         """Save the radial profile as CSV, plus the full 2D log-power spectrum
@@ -2820,6 +2974,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._sidecar_notes     = ''
         self._sidecar_objective = None
         self._sidecar_pixel_pitch_um = None
+        self._camera_kind       = None   # 'orcafire' | 'lucid' | None, see _apply_hints()
+        self._scale_bar_ref     = [None]  # current pg.ScaleBar on the main view, see _update_scale_bar()
         self._timestamps        = None   # 1-D float64, relative, display units
         self._ts_unit           = ''
         self._gains             = None   # 1-D float64, per-frame gain dB (from frame_data.csv)
@@ -3241,6 +3397,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._mask_item = pg.ImageItem()
         self._mask_item.setZValue(10)
         self.imview.getView().addItem(self._mask_item)
+        _connect_scale_bar_autoscale(
+            self.imview.getView(), self._scale_bar_ref,
+            lambda: self._spatial_scale.pitch_um)
 
         # Frame slider (for lazy loading; hides pyqtgraph's built-in timeline
         # when the full stack is not loaded)
@@ -3396,17 +3555,21 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._stored_field_refs   = sidecar.get('field_references', {})
 
         # Which camera wrote this sidecar determines the native sensor pixel
-        # pitch used for real spatial-frequency units (Tools > FFT). Neither
-        # app stamps a plain "camera" field, so detect by field names that are
-        # unique to each sidecar schema: Hamamatsu's FrameRecorder::writeSidecar()
-        # always writes "camera_bus"; the Lucid app's writeMetadataJson() always
+        # pitch (Tools > FFT) and which field-folder naming convention to
+        # search for (see _pca_field_keywords()). Neither app stamps a plain
+        # "camera" field, so detect by field names that are unique to each
+        # sidecar schema: Hamamatsu's FrameRecorder::writeSidecar() always
+        # writes "camera_bus"; the Lucid app's writeMetadataJson() always
         # writes "save_format". Unknown sidecar -> None -> FFT falls back to
-        # cycles/pixel instead of guessing a pitch.
+        # cycles/pixel, and field search tries both naming conventions.
         if 'camera_bus' in sidecar:
+            self._camera_kind = 'orcafire'
             self._sidecar_pixel_pitch_um = _ORCAFIRE_PIXEL_UM
         elif 'save_format' in sidecar:
+            self._camera_kind = 'lucid'
             self._sidecar_pixel_pitch_um = _LUCID_PIXEL_UM
         else:
+            self._camera_kind = None
             self._sidecar_pixel_pitch_um = None
         try:
             pitch = float(self._sidecar_pixel_pitch_um) / float(self._sidecar_objective)
@@ -3726,6 +3889,12 @@ class LucidViewer(ViewerMixin, QMainWindow):
         auto = not self._auto_levels_done
         self._auto_levels_done = True
         self.imview.setImage(display_frame, autoLevels=auto, autoRange=False)
+        if auto:
+            # Only recompute on a fresh file load (auto-levels reset), not
+            # every frame scrub within the same recording -- pixel size only
+            # depends on which file/objective is open, not the frame index.
+            pixel_size_um = self._spatial_scale.pitch_um
+            _update_scale_bar(self.imview.getView(), self._scale_bar_ref, pixel_size_um)
         self._pixel_inspector.update(display_frame)
         self._measurements.set_image_shape(display_frame.shape)
         self._apply_colormap(self.cmap_combo.currentText())
@@ -3910,7 +4079,25 @@ class LucidViewer(ViewerMixin, QMainWindow):
         except Exception:
             return None
 
-    def _find_field_folder(self, keyword: str, min_frames: int = 1,
+    def _pca_field_keywords(self):
+        """Folder-name keyword(s) to search for the multi-frame PCA source.
+
+        The two acquisition apps name this folder differently: Cpp_CameraControl
+        (Lucid camera) reuses the "white_field" prefix for both the flat-field
+        mean and the multi-frame PCA capture, distinguishing them only by frame
+        count; HamamatsuOrcaFire instead gives the multi-frame PCA capture its
+        own "pca_background" prefix, keeping "white_field" for the flat-field
+        mean only. Pick the convention that matches the camera that wrote this
+        recording's sidecar (self._camera_kind, set in _apply_hints()); when
+        unknown, try both rather than guessing wrong.
+        """
+        if self._camera_kind == 'orcafire':
+            return ('pca_background',)
+        if self._camera_kind == 'lucid':
+            return ('white_field',)
+        return ('white_field', 'pca_background')
+
+    def _find_field_folder(self, keyword, min_frames: int = 1,
                            sidecar_key: str = None, exclude: str = None):
         """Return path to best shape-matching folder whose name contains keyword.
 
@@ -3920,6 +4107,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
                   (3) closest-timestamp match with unknown shape and enough frames,
                   (4) None.
 
+        keyword: a single substring, or a tuple/list of substrings -- a folder
+                 matches if its name contains ANY of them (see _pca_field_keywords()).
         min_frames: skip folders that contain fewer than this many frames (use 2
                     for PCA so pre-averaged single-frame folders are bypassed).
         exclude: if set, skip auto-search candidates whose name contains this string
@@ -3927,20 +4116,22 @@ class LucidViewer(ViewerMixin, QMainWindow):
         """
         if not self._path:
             return None
+        keywords = (keyword,) if isinstance(keyword, str) else tuple(keyword)
 
         tw = self._reader.w if self._reader else self.w_spin.value()
         th = self._reader.h if self._reader else self.h_spin.value()
 
         # --- stored sidecar reference ---
         refs = self._stored_field_refs or {}
-        stored = refs.get(sidecar_key if sidecar_key else ('dark_folder' if 'dark' in keyword else 'white_folder'))
+        stored = refs.get(sidecar_key if sidecar_key else
+                          ('dark_folder' if any('dark' in kw for kw in keywords) else 'white_folder'))
         if stored and os.path.isdir(stored):
             shape = self._field_folder_shape(stored)
             if shape is None or shape == (tw, th):
                 if min_frames <= 1 or self._count_white_field_frames(stored) >= min_frames:
                     return stored
             else:
-                print(f'[field] stored ref {stored!r} shape {shape} != target {(tw,th)}, ignoring')
+                _dbg(f'[field] stored ref {stored!r} shape {shape} != target {(tw,th)}, ignoring')
 
         # --- timestamp-proximity search ---
         parent = os.path.dirname(self._path)
@@ -3954,7 +4145,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 continue
             raw_candidates = [
                 d for d in all_entries
-                if keyword in d and os.path.isdir(os.path.join(search_dir, d))
+                if any(kw in d for kw in keywords) and os.path.isdir(os.path.join(search_dir, d))
                 and (exclude is None or exclude not in d.lower())
             ]
             if exp_ts:
@@ -3978,7 +4169,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             for name in candidates:
                 folder = os.path.join(search_dir, name)
                 if min_frames > 1 and self._count_white_field_frames(folder) < min_frames:
-                    print(f'[field] skipping {name!r}: fewer than {min_frames} frames')
+                    _dbg(f'[field] skipping {name!r}: fewer than {min_frames} frames')
                     continue
                 shape  = self._field_folder_shape(folder)
                 if shape is None:
@@ -3988,7 +4179,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     shape_match = folder
                     break
                 else:
-                    print(f'[field] skipping {name!r}: shape {shape} != {(tw,th)}')
+                    _dbg(f'[field] skipping {name!r}: shape {shape} != {(tw,th)}')
             result = shape_match or unknown_shape
             if result:
                 return result
@@ -3999,7 +4190,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         try:
             all_files = sorted(os.listdir(folder))
         except OSError as e:
-            print(f'[field] listdir error on {folder!r}: {e}')
+            _dbg(f'[field] listdir error on {folder!r}: {e}')
             return None
 
         raw_candidates  = [f for f in all_files if os.path.splitext(f)[1].lower() == '.raw']
@@ -4010,13 +4201,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if raw_candidates:
             files = raw_candidates
             if tiff_candidates:
-                print(f'[field] skipping {len(tiff_candidates)} TIFF(s) — RAW files take precedence')
+                _dbg(f'[field] skipping {len(tiff_candidates)} TIFF(s) — RAW files take precedence')
         else:
             files = tiff_candidates
 
-        print(f'[field] files to load from {folder!r}: {files}')
+        _dbg(f'[field] files to load from {folder!r}: {files}')
         if not files:
-            print('[field] no matching files found')
+            _dbg('[field] no matching files found')
             return None
 
         # Viewer-current settings used as fallback if a file has no sidecar.
@@ -4032,7 +4223,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         frames = []
         for fname in files:
             if len(frames) >= MAX_FIELD_FRAMES:
-                print(f'[field] hit {MAX_FIELD_FRAMES}-frame cap; skipping remaining files')
+                _dbg(f'[field] hit {MAX_FIELD_FRAMES}-frame cap; skipping remaining files')
                 break
             fpath = os.path.join(folder, fname)
             ext   = os.path.splitext(fname)[1].lower()
@@ -4048,16 +4239,16 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     else:
                         fmt = default_fmt
                         if not sidecar:
-                            print(f'[field] WARNING: no sidecar for {fname} '
+                            _dbg(f'[field] WARNING: no sidecar for {fname} '
                                   f'({sidecar_status}); falling back to viewer '
                                   f'format {fmt!r}. Decoding may be wrong.')
                         else:
-                            print(f'[field] WARNING: sidecar for {fname} has no '
+                            _dbg(f'[field] WARNING: sidecar for {fname} has no '
                                   f'pixel_format key (found: {list(sidecar.keys())}); '
                                   f'falling back to viewer format {fmt!r}.')
                     w = int(sidecar.get('width',  default_w))
                     h = int(sidecar.get('height', default_h))
-                    print(f'[field]   {fname}: fmt={fmt!r}, {w}x{h}  [{sidecar_status}]')
+                    _dbg(f'[field]   {fname}: fmt={fmt!r}, {w}x{h}  [{sidecar_status}]')
                     r = RawReader(fpath, fmt, w, h,
                                   inverse_lut=_sqrt_inverse_lut_from_sidecar(sidecar))
                     n_file = len(r)
@@ -4066,7 +4257,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                         indices = range(n_file)
                     else:
                         indices = [int(k * n_file / budget) for k in range(budget)]
-                        print(f'[field]   {fname}: subsampling {n_file} → {len(indices)} frames')
+                        _dbg(f'[field]   {fname}: subsampling {n_file} → {len(indices)} frames')
                     for i in indices:
                         frames.append(r[i].astype(np.float32))
                     r.close()
@@ -4082,18 +4273,18 @@ class LucidViewer(ViewerMixin, QMainWindow):
                             indices = range(n_file)
                         else:
                             indices = [int(k * n_file / budget) for k in range(budget)]
-                            print(f'[field]   {fname}: subsampling {n_file} → {len(indices)} frames')
+                            _dbg(f'[field]   {fname}: subsampling {n_file} → {len(indices)} frames')
                         for i in indices:
                             frames.append(data[i].astype(np.float32))
-                print(f'[field]   loaded {fname}: {len(frames)} frames so far')
+                _dbg(f'[field]   loaded {fname}: {len(frames)} frames so far')
             except Exception as e:
-                print(f'[field]   ERROR loading {fname}: {e}')
+                _dbg(f'[field]   ERROR loading {fname}: {e}')
                 continue
 
         if not frames:
-            print('[field] no frames loaded after reading all files')
+            _dbg('[field] no frames loaded after reading all files')
             return None
-        print(f'[field] averaging {len(frames)} frames, shape {frames[0].shape}')
+        _dbg(f'[field] averaging {len(frames)} frames, shape {frames[0].shape}')
         return np.mean(frames, axis=0).astype(np.float32)
 
     def _read_average_gain(self, folder: str):
@@ -4360,7 +4551,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if self._reader is not None:
             if self._find_field_folder('white_field', min_frames=1):
                 flat_ok = True
-            if self._find_field_folder('white_field', min_frames=2):
+            if self._find_field_folder(self._pca_field_keywords(), min_frames=2):
                 pca_ok = True
 
         model = self.white_combo.model()
@@ -4471,7 +4662,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                         for i in range(data.shape[0]):
                             frames.append(data[i].astype(np.float32))
             except Exception as e:
-                print(f'[pca] error loading {fname}: {e}')
+                _dbg(f'[pca] error loading {fname}: {e}')
         return frames
 
     def _pca_cache_path(self, folder, h, w):
@@ -4495,12 +4686,46 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _compute_or_load_pca(self):
         """Load cached PCA basis or compute from white_field frames (async)."""
+        # Entering PCA mode always needs these widgets visible, regardless of
+        # which caller reached this method (combo change and checkbox toggle
+        # go through _on_white_mode_changed(), which already sets this, but
+        # _reload_fields() -- called after every file load and from the
+        # manual folder-picker actions -- calls straight in here without
+        # syncing visibility, which left the PCA settings button hidden even
+        # while PCA mode was actually active and working).
+        self._pca_n_lbl.setVisible(True)
+        self.pca_n_spin.setVisible(True)
+        self._pca_settings_btn.setVisible(True)
+
+        # Everything below here is synchronous on the GUI thread up until the
+        # async PcaComputeWorker branch at the bottom -- the folder search
+        # walks the filesystem and reads every candidate folder's sidecars,
+        # and a cache hit still means deserializing a full-resolution
+        # eigenvector array from disk. Both can take a visible moment, and
+        # without an explicit repaint here Qt won't redraw until this method
+        # returns to the event loop, so the UI would otherwise look frozen
+        # with no sign anything is happening until it's already done.
+        # repaint(), not processEvents() -- processEvents() pumps the WHOLE
+        # Qt event queue, including any other pending signal (a queued
+        # click, a timer), which can re-enter this method (or touch
+        # self._pca_mean/_pca_components) while they're mid-assignment a few
+        # lines below and crash natively with no catchable traceback.
+        # repaint() only redraws these two widgets, synchronously, with no
+        # other event processing.
+        self.corr_status_lbl.setText('PCA: locating source folder…')
+        self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
+        self._show_corr_progress()
+        self.corr_status_lbl.repaint()
+        self._corr_progress.repaint()
+
         if self._pca_universal:
             self._compute_universal_pca()
             return
 
-        folder = self._find_field_folder('white_field', min_frames=2, sidecar_key='white_pca_folder')
+        folder = self._find_field_folder(self._pca_field_keywords(), min_frames=2,
+                                         sidecar_key='white_pca_folder')
         if folder is None:
+            self._hide_corr_progress()
             self.corr_status_lbl.setText('white_field folder not found')
             self.white_chk.blockSignals(True)
             self.white_chk.setChecked(False)
@@ -4512,6 +4737,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         cache_path = self._pca_cache_path(folder, h, w)
 
         if self._pca_cache_valid(cache_path, folder):
+            self.corr_status_lbl.setText('PCA: loading cached basis…')
+            self.corr_status_lbl.repaint()
             try:
                 data = np.load(cache_path)
                 mean = data['mean']
@@ -4548,9 +4775,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
                     self._set_white_field_info(folder)
                     self._refresh_current_frame()
+                    self._auto_levels()
+                    self._hide_corr_progress()
                     return
             except Exception as exc:
-                print(f'[pca] cache load error: {exc}')
+                _dbg(f'[pca] cache load error: {exc}')
 
         # Load frames and compute PCA fully asynchronously
         fmt = self.fmt_combo.currentText()
@@ -4719,7 +4948,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self._launch_cell_adapt_worker(mu, comp, mu_low, comp_low)
                     return
             except Exception as exc:
-                print(f'[pca] master cache load error: {exc}')
+                _dbg(f'[pca] master cache load error: {exc}')
 
         # Compute master PCA from scratch.
         fmt = self.fmt_combo.currentText()
@@ -4928,7 +5157,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
             timestamps=self._timestamps,
             ts_unit=self._ts_unit,
             parent=self,
-            stylesheet=self.styleSheet())
+            stylesheet=self.styleSheet(),
+            cmap=self._current_colormap())
         dlg.exec()
 
     def _on_pca_error(self, msg):
@@ -5246,6 +5476,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         mode_idx = (self.white_combo.currentIndex() + 1) if self.white_chk.isChecked() else 0
         self._median_patch_lbl.setVisible(mode_idx == 3)
         self.median_patch_spin.setVisible(mode_idx == 3)
+        if mode_idx != 2:
+            self._pca_n_lbl.setVisible(False)
+            self.pca_n_spin.setVisible(False)
+            self._pca_settings_btn.setVisible(False)
         if mode_idx == 1:
             folder = self._find_field_folder('white_field')
             if folder:
@@ -5449,32 +5683,16 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     # ── Display ───────────────────────────────────────────────────────────────
     def _apply_colormap(self, name: str):
-        try:
-            cm = pg.colormap.get(name)
-        except Exception:
-            try:
-                cm = pg.colormap.get(name, source='matplotlib')
-            except Exception:
-                return
-        self.imview.setColorMap(cm)
-        self._trim_gradient_ticks(cm)
+        cm = get_colormap(name)
+        apply_colormap_to_view(self.imview, cm)
+        window = self._density_retrieval_window
+        if window is not None and not window.is_closing:
+            window.set_colormap(cm)
 
-    def _trim_gradient_ticks(self, cm: pg.ColorMap):
-        """Reduce the histogram gradient editor to exactly 3 handles (min, mid, max)."""
-        try:
-            ge = self.imview.getHistogramWidget().item.gradient
-            # Sample the colormap at 3 positions
-            positions = [0.0, 0.5, 1.0]
-            colors = [cm.mapToQColor(p) for p in positions]
-            # Remove all existing ticks
-            for tick in list(ge.ticks.keys()):
-                ge.removeTick(tick, finish=False)
-            # Add 3 ticks
-            for pos, color in zip(positions, colors):
-                ge.addTick(pos, color, finish=False)
-            ge.updateGradient()
-        except Exception:
-            pass
+    def _current_colormap(self):
+        """The main viewer's current colormap, so dialogs with their own
+        pg.ImageView can match it instead of falling back to grayscale."""
+        return get_colormap(self.cmap_combo.currentText())
 
     def _auto_levels(self):
         """Set display levels to the 3rd / 97th percentile of the current display frame."""
@@ -5528,6 +5746,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._scale_dialog.activateWindow()
 
     def _spatial_scale_changed(self):
+        _update_scale_bar(self.imview.getView(), self._scale_bar_ref, self._spatial_scale.pitch_um)
         self.scale_label.setText(self._spatial_scale.description)
         self.scale_label.setToolTip('Tools → Set Scale… changes this calibration. Manual scale persists across recordings.')
         window = self._density_retrieval_window
@@ -5564,7 +5783,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         pixel_size_um = self._spatial_scale.pitch_um
         dlg = _FFTDialog(frame, pixel_size_um=pixel_size_um,
                           sensor_pixel_um=self._sidecar_pixel_pitch_um,
-                          parent=self, stylesheet=_DARK_STYLE)
+                          parent=self, stylesheet=_DARK_STYLE,
+                          cmap=self._current_colormap())
         dlg.exec()
 
     def _open_density_retrieval(self):
@@ -5582,6 +5802,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                                      f'Cannot load the retrieval tool: {exc}')
                 return
             window = DensityRetrievalWindow(parent=self, stylesheet=_DARK_STYLE)
+            window.set_colormap(self._current_colormap())
             window.closed.connect(self._on_density_retrieval_closed)
             self._density_retrieval_window = window
             # imview.image contains the corrected float transmission before

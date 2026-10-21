@@ -43,6 +43,39 @@ print("PCA then nonlinear TV OK", flush=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PCA then nonlinear TV OK", result.stdout)
 
+    def test_cold_launch_without_console_keeps_blas_and_warning_streams_working(self):
+        script = """
+import sys, warnings
+original_stdout = sys.stdout
+sys.stdout = sys.stderr = sys.stdin = None
+import lucid_viewer
+import numpy as np
+warnings.warn("No-console diagnostic test")
+lucid_viewer._dbg("No console attached")
+np.linalg.svd(np.eye(4))
+np.linalg.lstsq(np.eye(4), np.ones(4), rcond=None)
+app = lucid_viewer.QApplication([])
+window = lucid_viewer.LucidViewer()
+window.show()
+app.processEvents()
+window.close()
+original_stdout.write("Cold no-console launch OK")
+"""
+        environment = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONNOUSERSITE="1")
+        environment.pop("CONDA_DLL_SEARCH_MODIFICATION_ENABLE", None)
+        if sys.platform == "win32":
+            environment["PATH"] = os.path.join(os.environ["SystemRoot"], "System32")
+        with tempfile.TemporaryDirectory() as directory:
+            # Isolate registry settings as in the ordinary launch regression.
+            script = script.replace('window = lucid_viewer.LucidViewer()',
+                'from PyQt6.QtCore import QSettings\nlucid_viewer.QSettings = lambda *a: QSettings(sys.argv[1], QSettings.Format.IniFormat)\nwindow = lucid_viewer.LucidViewer()')
+            result = subprocess.run([sys.executable, "-B", "-X", "faulthandler", "-c", script,
+                                     str(Path(directory) / "viewer.ini")],
+                cwd=Path(__file__).resolve().parent, env=environment,
+                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Cold no-console launch OK", result.stdout)
+
     def test_viewer_window_starts_and_closes_with_isolated_settings(self):
         script = """
 import sys

@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 )
 
 from retrieval_roi import ProcessingROI, ROISelectionViewBox
+from viewer_shared import apply_colormap_to_histogram, _update_scale_bar, _connect_scale_bar_autoscale
 
 from density_retrieval import (
     RetrievalParameters, RetrievalCancelled, retrieve_density,
@@ -80,6 +81,7 @@ class DensityRetrievalWindow(QMainWindow):
         self.retrieved_map = None
         self._solver_help = None
         self._summary = ""
+        self._colormap = None
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(150)
@@ -243,6 +245,11 @@ class DensityRetrievalWindow(QMainWindow):
             plot.setLabel("left", "y (mm)")
             plot.invertY(True)
             plot.setAspectLocked(True, ratio=1)
+        self._scale_bars = [[None], [None]]
+        for plot, bar_ref in zip((self.p1, self.p2), self._scale_bars):
+            # Retrieval axes are already in mm, so each view unit is 1000 µm.
+            _connect_scale_bar_autoscale(plot.getViewBox(), bar_ref,
+                                        lambda: 1000 if self._frame is not None else None)
         self.p2.setXLink(self.p1)
         self.p2.setYLink(self.p1)
         self._mouse_proxy = pg.SignalProxy(
@@ -329,6 +336,7 @@ class DensityRetrievalWindow(QMainWindow):
         self._invalidate()
         self.img1.clear()
         self.roi_group.set_image_shape(None)
+        self._set_transform()
         self.source_label.setText("No active image.")
         self.btn_retrieve.setEnabled(False)
 
@@ -460,11 +468,21 @@ class DensityRetrievalWindow(QMainWindow):
         self.img2.setImage(self.retrieved_map, autoLevels=True)
         self._set_transform()
 
+    def set_colormap(self, cm):
+        if cm is None or cm is self._colormap:
+            return
+        self._colormap = cm
+        for histogram in (self.lut1, self.lut2):
+            apply_colormap_to_histogram(histogram, cm)
+
     def _set_transform(self):
         dx_mm = self.pixel_input.value() * 1e-3
         self.img1.setTransform(QTransform(dx_mm, 0, 0, dx_mm, 0, 0))
         x, y = self._result_bounds[:2] if self._result_bounds else (0, 0)
         self.img2.setTransform(QTransform(dx_mm, 0, 0, dx_mm, x * dx_mm, y * dx_mm))
+        for plot, bar_ref in zip((self.p1, self.p2), self._scale_bars):
+            _update_scale_bar(plot.getViewBox(), bar_ref,
+                              1000 if self._frame is not None else None)
 
     def _set_aspect(self, equal):
         for plot in (self.p1, self.p2):

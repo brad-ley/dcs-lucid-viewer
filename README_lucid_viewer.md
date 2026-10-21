@@ -621,6 +621,37 @@ pip install PyQt6 pyqtgraph numpy scipy tifffile opencv-python pillow xraylib to
 | `xraylib` | Density Retrieval material optical constants |
 | `torch`, `hotopy` | Nonlinear Fresnel density retrieval |
 
+### Combined branch integration
+
+`codex/reconciled-viewer-measurements` combines the spatial-calibration branch
+(`88056f1`) with master (`d73fee6`). It keeps Set Scale, named presets,
+persistent main-image measurements, density retrieval and its solver help,
+exit-phase/transmission displays, processing ROI and median synthetic whites.
+The alternate Measure/Calibrate dialog and its per-objective calibration-file
+store are replaced by Set Scale's named presets.
+
+Master's other changes remain: camera-aware PCA-source discovery (`pca_background`
+for ORCA-Fire, `white_field` for Lucid, both for unknown cameras), cached-PCA
+control visibility and auto-levels, progress feedback, sampled temporal weights
+(at most 250 frames with original time/frame coordinates), conda-activated
+launchers, safe no-console diagnostics, BLAS DLL setup, readable FFT line
+labels, matched colormaps and zoom-responsive scale bars. The DLL search handle
+is retained for the process lifetime. Main and density scale bars use the active
+Set Scale calibration; density axes are in mm, so their bars use 1000 µm per
+view-coordinate unit. Zooming reuses one bar per view.
+
+The environment manifest retains master's PyQt6/Qt6 6.7.1 and sip 13.8.0
+compatibility pins, together with the retrieval branch's NumPy >=2,
+OpenBLAS/LAPACK and xraylib/PyTorch/HoToPy requirements. Existing `lucid-viewer`
+and `lucid-viewer-gpu` installations are used as-is for validation; this merge
+does not recreate or downgrade installed environments.
+
+Run the combined regression suite in either environment:
+
+```powershell
+python -B -X faulthandler -m unittest test_viewer_runtime test_density_retrieval test_median_white_field test_spatial_calibration test_reconciled_viewer -q
+```
+
 ### Windows Qt startup
 
 The viewer calls `viewer_runtime.prepare_qt_runtime()` before loading NumPy or Qt.
