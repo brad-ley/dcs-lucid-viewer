@@ -807,12 +807,23 @@ def _field_correct_float(frame, dark, white,
     return out.astype(np.float32)
 
 
+_PCA_AUTO_VARIANCE_TARGET = 0.90
+
+
 def _auto_pca_n(explained: np.ndarray) -> int:
-    """Scree-plot elbow: first i where explained[i] <= 1.5 * explained[i+1]; use i components."""
-    for i in range(len(explained) - 1):
-        if explained[i] <= 1.5 * explained[i + 1]:
-            return max(1, i)
-    return max(1, len(explained))
+    """Smallest n whose first n components explain at least
+    _PCA_AUTO_VARIANCE_TARGET (90%) of total variance, capped at however
+    many components were actually trained/stored. Replaces an earlier
+    scree-plot-elbow (consecutive-ratio) heuristic that was unreliable: it
+    fired on the very first comparison whenever the curve decayed
+    gradually from the start rather than dropping sharply after 1-2
+    dominant components, so it tended to return n=1 regardless of how
+    much real signal the later components still carried."""
+    cumulative = np.cumsum(explained)
+    over = np.flatnonzero(cumulative >= _PCA_AUTO_VARIANCE_TARGET)
+    if len(over) == 0:
+        return max(1, len(explained))
+    return max(1, int(over[0]) + 1)
 
 
 @functools.lru_cache(maxsize=16)
@@ -3016,6 +3027,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._pca_shape         = None   # (H, W) for which PCA was computed
         self._pca_folder        = None   # folder path used for cached PCA
         self._pca_n_components  = 5      # number of components to use for correction
+        # Folder for which _pca_n_components currently applies (auto-picked or
+        # user-adjusted) -- reloading the SAME white-field folder keeps that
+        # value rather than re-running auto-selection; a different folder
+        # (different background) re-triggers it. See _compute_or_load_pca().
+        self._pca_n_folder      = None
         self._pca_worker        = None   # PcaComputeWorker while computing
         self._pca_mean_low          = None  # (H*W,) float32 low-res PCA mean
         self._pca_components_low    = None  # (n_stored, H*W) float32 low-res eigenvectors
@@ -4760,11 +4776,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     n_stored = comp.shape[0]
                     try:
                         explained = data['explained']
-                        n_auto = _auto_pca_n(explained)
-                        self.pca_n_spin.blockSignals(True)
-                        self.pca_n_spin.setValue(n_auto)
-                        self.pca_n_spin.blockSignals(False)
-                        self._pca_n_components = n_auto
+                        if folder != self._pca_n_folder:
+                            n_auto = _auto_pca_n(explained)
+                            self.pca_n_spin.blockSignals(True)
+                            self.pca_n_spin.setValue(n_auto)
+                            self.pca_n_spin.blockSignals(False)
+                            self._pca_n_components = n_auto
+                            self._pca_n_folder = folder
                         ev_str = ', '.join(
                             f'{e*100:.1f}%' for e in explained[:min(3, n_stored)])
                     except Exception:
@@ -4821,11 +4839,13 @@ class LucidViewer(ViewerMixin, QMainWindow):
         # cache_path is written by PcaComputeWorker itself now (see its
         # run()), off the GUI thread -- nothing left to save here.
         n_stored = components.shape[0]
-        n_auto = _auto_pca_n(explained)
-        self.pca_n_spin.blockSignals(True)
-        self.pca_n_spin.setValue(n_auto)
-        self.pca_n_spin.blockSignals(False)
-        self._pca_n_components = n_auto
+        if folder != self._pca_n_folder:
+            n_auto = _auto_pca_n(explained)
+            self.pca_n_spin.blockSignals(True)
+            self.pca_n_spin.setValue(n_auto)
+            self.pca_n_spin.blockSignals(False)
+            self._pca_n_components = n_auto
+            self._pca_n_folder = folder
         ev_str = ', '.join(
             f'{e*100:.1f}%' for e in explained[:min(3, n_stored)])
         blur_tag = f'  [blur σ={self._pca_blur_sigma}px]' if self._pca_blur_enabled else ''
