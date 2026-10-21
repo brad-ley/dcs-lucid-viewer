@@ -90,7 +90,8 @@ from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon
 from PyQt6.QtGui import QDesktopServices, QPainter, QColor, QPen, QFont
 
 import pyqtgraph as pg
-from viewer_shared import COLORMAPS, _build_pixel_mask, ViewerMixin, _DARK_STYLE_BASE
+from viewer_shared import (COLORMAPS, _build_pixel_mask, ViewerMixin, _DARK_STYLE_BASE,
+                            get_colormap, apply_colormap_to_view)
 
 _FORMAT_BITS = {
     'Mono8': 8, 'Mono10': 10, 'Mono10p': 10, 'Mono10Packed': 10,
@@ -2255,7 +2256,7 @@ class _PcaEigenvectorDialog(QDialog):
 
     def __init__(self, components, mean, shape, explained,
                  reader, timestamps, ts_unit,
-                 parent=None, stylesheet=''):
+                 parent=None, stylesheet='', cmap=None):
         super().__init__(parent)
         self.setWindowTitle('PCA Eigenvector Viewer')
         self.setMinimumSize(720, 560)
@@ -2285,6 +2286,7 @@ class _PcaEigenvectorDialog(QDialog):
         self._img_view.ui.menuBtn.hide()
         self._img_view.setMinimumHeight(280)
         layout.addWidget(self._img_view)
+        apply_colormap_to_view(self._img_view, cmap)
 
         # ── component slider ──────────────────────────────────────────────────
         slider_row = QHBoxLayout()
@@ -2617,7 +2619,7 @@ class _CalibrationDialog(QDialog):
     """
 
     def __init__(self, frame, camera_kind=None, objective=None,
-                 parent=None, stylesheet=''):
+                 parent=None, stylesheet='', cmap=None):
         super().__init__(parent)
         self.setWindowTitle('Measure/Calibrate')
         self.setMinimumSize(720, 760)
@@ -2663,6 +2665,7 @@ class _CalibrationDialog(QDialog):
         layout.addWidget(self._view)
         levels = (float(np.percentile(self._frame, 2)), float(np.percentile(self._frame, 98)))
         self._view.setImage(self._frame, levels=levels, autoHistogramRange=False)
+        apply_colormap_to_view(self._view, cmap)
         self._view.getView().scene().sigMouseClicked.connect(self._on_scene_clicked)
 
         btn_row = QHBoxLayout()
@@ -2818,13 +2821,14 @@ class _FFTDialog(QDialog):
     in real units (cycles/um); otherwise it falls back to cycles/pixel."""
 
     def __init__(self, frame, pixel_size_um=None, sensor_pixel_um=None,
-                 parent=None, stylesheet=''):
+                 parent=None, stylesheet='', cmap=None):
         super().__init__(parent)
         self.setWindowTitle('Spatial Frequency (FFT) Viewer')
         self.setMinimumSize(760, 760)
         if stylesheet:
             self.setStyleSheet(stylesheet)
 
+        self._cmap = cmap
         self._frame = np.asarray(frame)
         self._pixel_size_um = pixel_size_um
         # Scale factor applied to cycles/pixel to get the displayed unit.
@@ -2960,6 +2964,7 @@ class _FFTDialog(QDialog):
 
         src_levels = self._pct_levels(self._frame, 2, 98)
         self._src_view.setImage(self._frame, levels=src_levels, autoHistogramRange=False)
+        apply_colormap_to_view(self._src_view, self._cmap)
         self._scale_bar_ref = [None]
         _update_scale_bar(self._src_view.getView(), self._scale_bar_ref,
                           pixel_size_um, self._frame.shape[1])
@@ -2994,6 +2999,7 @@ class _FFTDialog(QDialog):
         log_power = np.log1p(power)
         levels = self._pct_levels(log_power, 2, 98)
         self._fft_view.setImage(log_power, levels=levels, autoHistogramRange=False)
+        apply_colormap_to_view(self._fft_view, self._cmap)
 
         # Azimuthal average of the power spectrum vs. spatial frequency
         # (computed in cycles/pixel, Nyquist = 0.5, then rescaled for display).
@@ -5290,7 +5296,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
             timestamps=self._timestamps,
             ts_unit=self._ts_unit,
             parent=self,
-            stylesheet=self.styleSheet())
+            stylesheet=self.styleSheet(),
+            cmap=self._current_colormap())
         dlg.exec()
 
     def _on_pca_error(self, msg):
@@ -5694,32 +5701,12 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     # ── Display ───────────────────────────────────────────────────────────────
     def _apply_colormap(self, name: str):
-        try:
-            cm = pg.colormap.get(name)
-        except Exception:
-            try:
-                cm = pg.colormap.get(name, source='matplotlib')
-            except Exception:
-                return
-        self.imview.setColorMap(cm)
-        self._trim_gradient_ticks(cm)
+        apply_colormap_to_view(self.imview, get_colormap(name))
 
-    def _trim_gradient_ticks(self, cm: pg.ColorMap):
-        """Reduce the histogram gradient editor to exactly 3 handles (min, mid, max)."""
-        try:
-            ge = self.imview.getHistogramWidget().item.gradient
-            # Sample the colormap at 3 positions
-            positions = [0.0, 0.5, 1.0]
-            colors = [cm.mapToQColor(p) for p in positions]
-            # Remove all existing ticks
-            for tick in list(ge.ticks.keys()):
-                ge.removeTick(tick, finish=False)
-            # Add 3 ticks
-            for pos, color in zip(positions, colors):
-                ge.addTick(pos, color, finish=False)
-            ge.updateGradient()
-        except Exception:
-            pass
+    def _current_colormap(self):
+        """The main viewer's current colormap, so dialogs with their own
+        pg.ImageView can match it instead of falling back to grayscale."""
+        return get_colormap(self.cmap_combo.currentText())
 
     def _auto_levels(self):
         """Set display levels to the 3rd / 97th percentile of the current display frame."""
@@ -5766,7 +5753,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._camera_kind, self._sidecar_objective, self._sidecar_pixel_pitch_um)
         dlg = _FFTDialog(frame, pixel_size_um=pixel_size_um,
                           sensor_pixel_um=self._sidecar_pixel_pitch_um,
-                          parent=self, stylesheet=_DARK_STYLE)
+                          parent=self, stylesheet=_DARK_STYLE,
+                          cmap=self._current_colormap())
         dlg.exec()
 
     def _open_calibration_dialog(self):
@@ -5777,7 +5765,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
             return
         dlg = _CalibrationDialog(frame, camera_kind=self._camera_kind,
                                  objective=self._sidecar_objective,
-                                 parent=self, stylesheet=_DARK_STYLE)
+                                 parent=self, stylesheet=_DARK_STYLE,
+                                 cmap=self._current_colormap())
         dlg.exec()
         # A calibration just saved may change this recording's own pixel
         # size (if its camera/objective matches), so redraw the scale bar.

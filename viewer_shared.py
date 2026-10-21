@@ -18,6 +18,42 @@ _ROI_MAX_PIXELS = 600 * 600
 COLORMAPS = ['grey', 'inferno', 'hot', 'plasma', 'magma', 'viridis', 'CET-L1', 'CET-L4']
 
 
+def get_colormap(name):
+    """Resolve a colormap by name, falling back to matplotlib's registry for
+    names (e.g. 'inferno') not bundled with pyqtgraph itself. Returns None if
+    neither lookup succeeds."""
+    try:
+        return pg.colormap.get(name)
+    except Exception:
+        try:
+            return pg.colormap.get(name, source='matplotlib')
+        except Exception:
+            return None
+
+
+def apply_colormap_to_view(imview, cm):
+    """Set `cm` on `imview` and trim its histogram gradient editor down to 3
+    handles (min/mid/max). Used to keep every pg.ImageView in the app --
+    main viewer and every dialog that pops up its own -- showing the same
+    colormap and the same simplified gradient editor, instead of dialogs
+    silently falling back to pyqtgraph's default grayscale + full handle set.
+    """
+    if cm is None:
+        return
+    imview.setColorMap(cm)
+    try:
+        ge = imview.getHistogramWidget().item.gradient
+        positions = [0.0, 0.5, 1.0]
+        colors = [cm.mapToQColor(p) for p in positions]
+        for tick in list(ge.ticks.keys()):
+            ge.removeTick(tick, finish=False)
+        for pos, color in zip(positions, colors):
+            ge.addTick(pos, color, finish=False)
+        ge.updateGradient()
+    except Exception:
+        pass
+
+
 def _build_pixel_mask(frame: np.ndarray, sat_val: int) -> np.ndarray:
     """Return RGBA uint8 (H, W, 4): red = saturated, yellow = zero-valued dead."""
     rgba      = np.zeros((*frame.shape[:2], 4), dtype=np.uint8)
