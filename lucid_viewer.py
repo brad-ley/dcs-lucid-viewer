@@ -797,18 +797,27 @@ def _field_correct_float(frame, dark, white,
     return out.astype(np.float32)
 
 
-_PCA_AUTO_VARIANCE_TARGET = 0.90
+_PCA_ELBOW_MIN_RATIO = 2.0       # explained[i] / explained[i+1] that counts as a hard elbow
+_PCA_AUTO_VARIANCE_TARGET = 0.75  # fallback when there's no hard elbow
 
 
 def _auto_pca_n(explained: np.ndarray) -> int:
-    """Smallest n whose first n components explain at least
-    _PCA_AUTO_VARIANCE_TARGET (90%) of total variance, capped at however
-    many components were actually trained/stored. Replaces an earlier
-    scree-plot-elbow (consecutive-ratio) heuristic that was unreliable: it
-    fired on the very first comparison whenever the curve decayed
-    gradually from the start rather than dropping sharply after 1-2
-    dominant components, so it tended to return n=1 regardless of how
-    much real signal the later components still carried."""
+    """Scree elbow first: n = i+1 at the largest consecutive drop
+    explained[i] / explained[i+1], if that drop is at least
+    _PCA_ELBOW_MIN_RATIO. Without a hard elbow (gradual decay), fall back to
+    the smallest n reaching _PCA_AUTO_VARIANCE_TARGET cumulative variance,
+    capped at the number of stored components.
+
+    The old elbow test took the FIRST ratio under a threshold, so a curve
+    that decays gradually from the start tripped it at i=0 and always gave
+    n=1; taking the largest drop avoids that."""
+    explained = np.asarray(explained, dtype=np.float64)
+    if len(explained) >= 2:
+        nxt = explained[1:]
+        ratios = np.where(nxt > 0, explained[:-1] / np.where(nxt > 0, nxt, 1.0), np.inf)
+        i = int(np.argmax(ratios))
+        if ratios[i] >= _PCA_ELBOW_MIN_RATIO:
+            return i + 1
     cumulative = np.cumsum(explained)
     over = np.flatnonzero(cumulative >= _PCA_AUTO_VARIANCE_TARGET)
     if len(over) == 0:
