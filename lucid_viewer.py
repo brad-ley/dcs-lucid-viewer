@@ -2541,7 +2541,12 @@ def _position_line_label(label, p0, p1, offset_px=14):
         nx, ny = -dy / length, dx / length
     else:
         angle, nx, ny = 0.0, 0.0, -1.0
-    label.setAngle(angle)
+    # TextItem.setAngle() is counter-clockwise from the parent's x axis, but
+    # this view's y axis is inverted (row-major images), so the angle has to
+    # be negated to actually line up with the line -- otherwise cardinal
+    # angles look fine (a line is symmetric under +180) but anything in
+    # between, e.g. 45 degrees, renders rotated a full 90 degrees off.
+    label.setAngle(-angle)
     mx, my = (p0.x() + p1.x()) / 2.0, (p0.y() + p1.y()) / 2.0
     label.setPos(mx + nx * offset_px, my + ny * offset_px)
 
