@@ -11,9 +11,10 @@ from PyQt6.QtGui import QAction, QActionGroup, QTransform
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QFormLayout, QGroupBox, QLabel,
     QDoubleSpinBox, QSpinBox, QLineEdit, QCheckBox, QPushButton, QComboBox,
-    QScrollArea, QSplitter, QProgressBar, QToolButton, QSizePolicy,
+    QScrollArea, QSplitter, QProgressBar, QToolButton, QSizePolicy, QMessageBox,
 )
 
+from retrieval_availability import missing_retrieval_dependencies, retrieval_unavailable_message
 from retrieval_roi import ProcessingROI, ROISelectionViewBox
 from viewer_shared import apply_colormap_to_histogram, _update_scale_bar, _connect_scale_bar_autoscale
 
@@ -86,7 +87,12 @@ class DensityRetrievalWindow(QMainWindow):
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(150)
         self._debounce.timeout.connect(self._start_latest)
-        self._build_ui()
+        try:
+            self._build_ui()
+        except Exception:
+            # An incompatible UI/runtime must not leave a partial child window alive.
+            self.deleteLater()
+            raise
 
     @property
     def is_busy(self):
@@ -355,6 +361,14 @@ class DensityRetrievalWindow(QMainWindow):
             self._worker.requestInterruption()
 
     def _solver_changed(self, *_args):
+        if self.nonlin_action.isChecked():
+            missing = missing_retrieval_dependencies(nonlinear=True)
+            if missing:
+                self.paganin_action.setChecked(True)
+                self.solver_group.hide()
+                QMessageBox.warning(self, 'Nonlinear retrieval unavailable',
+                                    retrieval_unavailable_message(missing, nonlinear=True))
+                return
         self.solver_group.setVisible(self.nonlin_action.isChecked())
         self._parameters_changed()
 

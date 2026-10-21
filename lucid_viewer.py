@@ -13,6 +13,7 @@ compute bytes-per-frame and derive the frame count automatically.
 import sys
 import os
 from viewer_runtime import prepare_qt_runtime
+from retrieval_availability import missing_retrieval_dependencies, retrieval_unavailable_message
 
 # Qt must resolve Windows ICU before conda's native libraries are loaded.
 prepare_qt_runtime()
@@ -5795,19 +5796,26 @@ class LucidViewer(ViewerMixin, QMainWindow):
             return
         window = self._density_retrieval_window
         if window is None:
+            missing = missing_retrieval_dependencies()
+            if missing:
+                QMessageBox.warning(self, 'Density Retrieval unavailable',
+                                    retrieval_unavailable_message(missing))
+                return
             try:
                 from density_retrieval_window import DensityRetrievalWindow
-            except ImportError as exc:
-                QMessageBox.critical(self, 'Density Retrieval',
-                                     f'Cannot load the retrieval tool: {exc}')
+                window = DensityRetrievalWindow(parent=self, stylesheet=_DARK_STYLE)
+                window.set_colormap(self._current_colormap())
+                window.closed.connect(self._on_density_retrieval_closed)
+                self._density_retrieval_window = window
+                # Use corrected float transmission before display contrast or masks.
+                self._push_density_frame(frame, self.frame_slider.value())
+            except Exception as exc:
+                if window is not None:
+                    window.close()
+                self._density_retrieval_window = None
+                QMessageBox.warning(self, 'Density Retrieval unavailable',
+                                    retrieval_unavailable_message(error=exc))
                 return
-            window = DensityRetrievalWindow(parent=self, stylesheet=_DARK_STYLE)
-            window.set_colormap(self._current_colormap())
-            window.closed.connect(self._on_density_retrieval_closed)
-            self._density_retrieval_window = window
-            # imview.image contains the corrected float transmission before
-            # the colormap, histogram levels, display mask or export encoding.
-            self._push_density_frame(frame, self.frame_slider.value())
         if window.is_closing:
             self.statusBar().showMessage('Density Retrieval is finishing its current calculation.')
             return

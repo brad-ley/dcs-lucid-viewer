@@ -507,6 +507,15 @@ and dark/white/PCA correction changes update that copy. No background or
 flat-field correction is repeated inside the tool. Input should be normalized
 transmission (vacuum = 1); opening the tool does not normalize raw counts.
 
+Density retrieval is optional on older installations. If SciPy or xraylib is
+missing, selecting this tool shows a warning naming the missing packages and
+the active Python executable, and does not load the retrieval UI. Standard
+viewing, calibration and measurements remain available. Import/DLL errors or
+incompatible window initialization also produce a warning and close the
+failed tool window. Torch and HoToPy are checked when selecting the nonlinear
+solver; without them, the Paganin Fourier filter remains available.
+
+
 The analysis matches the reference `pci_retrieval_gui.py`: select **Paganin
 Fourier filter** or **Nonlinear Fresnel with TV (TikhonovTV)** from its Phase
 Retrieval menu. Energy, formula, RR1 (source to sample), RR2 (sample to detector),
@@ -649,7 +658,7 @@ does not recreate or downgrade installed environments.
 Run the combined regression suite in either environment:
 
 ```powershell
-python -B -X faulthandler -m unittest test_viewer_runtime test_density_retrieval test_median_white_field test_spatial_calibration test_reconciled_viewer -q
+python -B -X faulthandler -m unittest test_viewer_runtime test_density_retrieval test_median_white_field test_spatial_calibration test_reconciled_viewer test_retrieval_availability -q
 ```
 
 ### Windows Qt startup
