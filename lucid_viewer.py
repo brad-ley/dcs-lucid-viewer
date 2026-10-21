@@ -12,6 +12,12 @@ compute bytes-per-frame and derive the frame count automatically.
 
 import sys
 import os
+from viewer_runtime import prepare_qt_runtime
+from retrieval_availability import missing_retrieval_dependencies, retrieval_unavailable_message
+
+# Qt must resolve Windows ICU before conda's native libraries are loaded.
+prepare_qt_runtime()
+
 
 # numpy's BLAS backend (MKL/OpenBLAS, under <env>\Library\bin on a
 # conda-forge Windows build) needs to be resolvable by the Windows DLL
@@ -27,7 +33,7 @@ if sys.platform == 'win32':
     _conda_lib_bin = os.path.join(sys.prefix, 'Library', 'bin')
     if os.path.isdir(_conda_lib_bin):
         try:
-            os.add_dll_directory(_conda_lib_bin)
+            _conda_dll_directory = os.add_dll_directory(_conda_lib_bin)
         except (AttributeError, OSError):
             pass
 
@@ -83,7 +89,7 @@ from PyQt6.QtWidgets import (
     QSplitter, QMessageBox, QSlider, QCheckBox, QSizePolicy,
     QDialog, QProgressBar, QDialogButtonBox, QFrame, QMenu,
     QInputDialog, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView, QDoubleSpinBox, QListWidget,
+    QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon
@@ -91,7 +97,12 @@ from PyQt6.QtGui import QDesktopServices, QPainter, QColor, QPen, QFont
 
 import pyqtgraph as pg
 from viewer_shared import (COLORMAPS, _build_pixel_mask, ViewerMixin, _DARK_STYLE_BASE,
-                            get_colormap, apply_colormap_to_view)
+                           get_colormap, apply_colormap_to_view,
+                           _update_scale_bar, _connect_scale_bar_autoscale)
+from median_white_field import correct_median_white, median_plan, MedianCancelled
+from spatial_calibration import (
+    SpatialCalibration, LineDrawingViewBox, MeasurementOverlay, SetScaleDialog,
+)
 
 _FORMAT_BITS = {
     'Mono8': 8, 'Mono10': 10, 'Mono10p': 10, 'Mono10Packed': 10,
@@ -987,7 +998,7 @@ class TiffExportWorker(QThread):
                  pca_mean=None, pca_components=None, pca_n_components=5,
                  pca_mean_low=None, pca_components_low=None,
                  pca_blur_enabled=False, pca_blur_sigma=400,
-                 pca_cell_gain=None):
+                 pca_cell_gain=None, median_patch_size=None):
         super().__init__()
         self._out_path            = out_path
         self._reader              = reader
@@ -1014,12 +1025,18 @@ class TiffExportWorker(QThread):
         self._pca_blur_enabled    = pca_blur_enabled
         self._pca_blur_sigma      = pca_blur_sigma
         self._pca_cell_gain       = pca_cell_gain
+        self._median_patch_size   = median_patch_size
         self._cancelled           = False
 
     def cancel(self):
         self._cancelled = True
 
     def _corrected_float(self, frame, data_gain):
+        if self._median_patch_size is not None:
+            return correct_median_white(
+                frame, self._median_patch_size, dark=self._dark_field,
+                dark_gain=self._dark_field_gain, data_gain=data_gain,
+                cancelled=lambda: self._cancelled).image
         """Float32 x-ray transmission for a frame, or None if no correction."""
         if self._pca_mean is not None and self._pca_components is not None:
             mu   = self._pca_mean
@@ -1103,6 +1120,9 @@ class TiffExportWorker(QThread):
             'code_max':         int(code_max),
             'decode':           self._PER_FRAME_DECODE,
         }
+        metadata = json.loads(self._desc) if self._desc else {}
+        if "correction" in metadata:
+            info["correction"] = metadata["correction"]
         with open(side, 'w', encoding='utf-8') as fh:
             json.dump(info, fh, indent=2)
 
@@ -1119,7 +1139,8 @@ class TiffExportWorker(QThread):
             # ImageJ mode requires contiguous=True, which is incompatible with compression
             imagej_write_kwargs = {}
 
-            corr_active = (self._dark_field is not None or self._white_field is not None
+            corr_active = (self._median_patch_size is not None
+                           or self._dark_field is not None or self._white_field is not None
                            or (self._pca_mean is not None and self._pca_components is not None))
             code_max    = int((1 << self._pixel_bits) - 1)
             self.phase.emit('Exporting')
@@ -1210,6 +1231,8 @@ class TiffExportWorker(QThread):
 
             self.export_done.emit(
                 f'Exported {n} frames → {os.path.basename(self._out_path)}')
+        except MedianCancelled:
+            self.export_error.emit("Export cancelled.")
         except Exception as exc:
             self.export_error.emit(str(exc))
 
@@ -1234,7 +1257,7 @@ class AverageExportWorker(QThread):
                  pca_mean=None, pca_components=None, pca_n_components=5,
                  pca_mean_low=None, pca_components_low=None,
                  pca_blur_enabled=False, pca_blur_sigma=400,
-                 pca_cell_gain=None):
+                 pca_cell_gain=None, median_patch_size=None):
         super().__init__()
         self._out_path            = out_path
         self._reader              = reader
@@ -1255,6 +1278,7 @@ class AverageExportWorker(QThread):
         self._pca_blur_enabled    = pca_blur_enabled
         self._pca_blur_sigma      = pca_blur_sigma
         self._pca_cell_gain       = pca_cell_gain
+        self._median_patch_size   = median_patch_size
         self._cancelled           = False
 
     def cancel(self):
@@ -1263,6 +1287,11 @@ class AverageExportWorker(QThread):
     # Identical to TiffExportWorker._corrected_float()/GifExportWorker's own
     # copy -- see TiffExportWorker's version for the per-step reasoning.
     def _corrected_float(self, frame, data_gain):
+        if self._median_patch_size is not None:
+            return correct_median_white(
+                frame, self._median_patch_size, dark=self._dark_field,
+                dark_gain=self._dark_field_gain, data_gain=data_gain,
+                cancelled=lambda: self._cancelled).image
         if self._pca_mean is not None and self._pca_components is not None:
             mu   = self._pca_mean
             comp = self._pca_components
@@ -1316,7 +1345,7 @@ class AverageExportWorker(QThread):
             # projection onto the frame's OWN content, not a fixed reference,
             # so it has no fixed term to factor out and must run per frame.
             pca_active  = (self._pca_mean is not None and self._pca_components is not None)
-            flat_active = (not pca_active
+            flat_active = (not pca_active and self._median_patch_size is None
                           and (self._dark_field is not None or self._white_field is not None))
             gains = self._gains
             constant_gain = (gains is None or len(gains) == 0
@@ -1386,6 +1415,8 @@ class AverageExportWorker(QThread):
             tifffile.imwrite(self._out_path, out, description=json.dumps(meta, indent=2))
             self.export_done.emit(
                 f'Exported average of {n} frames → {os.path.basename(self._out_path)}')
+        except MedianCancelled:
+            self.export_error.emit("Export cancelled.")
         except Exception as exc:
             self.export_error.emit(str(exc))
 
@@ -1403,7 +1434,7 @@ class GifExportWorker(QThread):
                  pca_mean_low=None, pca_components_low=None,
                  pca_blur_enabled=False, pca_blur_sigma=400,
                  pca_cell_gain=None,
-                 gains=None, parent=None):
+                 gains=None, parent=None, median_patch_size=None):
         super().__init__(parent)
         self._out_path            = out_path
         self._reader              = reader
@@ -1425,6 +1456,7 @@ class GifExportWorker(QThread):
         self._pca_blur_enabled    = pca_blur_enabled
         self._pca_blur_sigma      = pca_blur_sigma
         self._pca_cell_gain       = pca_cell_gain
+        self._median_patch_size   = median_patch_size
         self._gains               = gains
         self._cancelled           = False
 
@@ -1432,6 +1464,11 @@ class GifExportWorker(QThread):
         self._cancelled = True
 
     def _corrected_float(self, frame, data_gain):
+        if self._median_patch_size is not None:
+            return correct_median_white(
+                frame, self._median_patch_size, dark=self._dark_field,
+                dark_gain=self._dark_field_gain, data_gain=data_gain,
+                cancelled=lambda: self._cancelled).image
         if self._pca_mean is not None and self._pca_components is not None:
             mu   = self._pca_mean
             comp = self._pca_components
@@ -1471,6 +1508,14 @@ class GifExportWorker(QThread):
         )
 
     def run(self):
+        try:
+            self._run_export()
+        except MedianCancelled:
+            self.export_error.emit("GIF export cancelled.")
+        except Exception as exc:
+            self.export_error.emit(str(exc))
+
+    def _run_export(self):
         try:
             from PIL import Image
         except ImportError:
@@ -1734,6 +1779,35 @@ class CellAdaptWorker(QThread):
         except Exception as exc:
             self.adapt_progress.emit(f'Cell adaptation error: {exc}')
             self.adapt_done.emit(None, None, None, None)
+
+
+class MedianCorrectionWorker(QThread):
+    """One image snapshot; only the GUI thread commits a completed result."""
+    result_ready = pyqtSignal(int, object)
+    failed = pyqtSignal(int, str)
+
+    def __init__(self, request_id, frame_index, cache_key, frame, patch_size,
+                 dark=None, dark_gain=None, data_gain=None, parent=None):
+        super().__init__(parent)
+        self.request_id = request_id
+        self.frame_index = frame_index
+        self.cache_key = cache_key
+        self.frame = frame
+        self.patch_size = patch_size
+        self.dark = dark
+        self.dark_gain = dark_gain
+        self.data_gain = data_gain
+
+    def run(self):
+        try:
+            result = correct_median_white(
+                self.frame, self.patch_size, dark=self.dark, dark_gain=self.dark_gain,
+                data_gain=self.data_gain, cancelled=self.isInterruptionRequested)
+            self.result_ready.emit(self.request_id, result)
+        except MedianCancelled:
+            pass
+        except Exception as exc:
+            self.failed.emit(self.request_id, str(exc))
 
 
 class FieldLoadWorker(QThread):
@@ -2462,84 +2536,7 @@ class _PcaEigenvectorDialog(QDialog):
 _ORCAFIRE_PIXEL_UM = 4.6
 _LUCID_PIXEL_UM    = 2.74
 
-# ── Per-objective magnification calibration store ────────────────────────────
-#
-# A measured (camera, objective) -> real-world um/pixel calibration, saved by
-# the "Calibrate Objective..." dialog from a line drawn across a feature of
-# known physical length. This is preferred over the theoretical
-# pitch/magnification estimate above wherever both are available, since it
-# accounts for whatever the optical path actually does (tube lens, etc.)
-# rather than assuming an ideal one.
-#
-# Shared across every PC running this viewer: stored on the same network
-# share the app itself is deployed from, next to (but not inside, so a
-# "git pull" never touches it) prod_code/LucidVisionCamera. Reads/writes try
-# that shared copy first so every workstation sees the same calibration; if
-# the share is unreachable (drive not mapped, no permission, etc.) they fall
-# back to a per-machine local copy instead.
-_CALIBRATION_NETWORK_PATH = r'Z:\6. Software\prod_code\objective_calibration.json'
-_CALIBRATION_LOCAL_PATH = os.path.join(
-    os.environ.get('LOCALAPPDATA') or tempfile.gettempdir(),
-    'LucidViewer', 'objective_calibration.json')
-
-
-def _calibration_key(camera_kind, objective):
-    camera_kind = camera_kind or 'unknown'
-    return f'{camera_kind}|{float(objective):g}'
-
-
-def _load_calibration_store():
-    """Return (data_dict, path_used) -- the shared network copy if readable,
-    else the local fallback, else ({}, None)."""
-    for path in (_CALIBRATION_NETWORK_PATH, _CALIBRATION_LOCAL_PATH):
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f), path
-        except (OSError, ValueError):
-            continue
-    return {}, None
-
-
-def _save_calibration_entry(camera_kind, objective, pixel_size_um, extra=None):
-    """Write one (camera, objective) -> pixel_size_um entry, merging with
-    whatever's already stored there. Tries the shared network path first;
-    falls back to the local path only if that's unreachable. Returns the
-    path actually written, or None if both failed."""
-    key = _calibration_key(camera_kind, objective)
-    entry = {'pixel_size_um': pixel_size_um,
-              'camera_kind': camera_kind, 'objective_magnification': objective,
-              'saved_at': time.strftime('%Y-%m-%dT%H:%M:%S')}
-    if extra:
-        entry.update(extra)
-    for path in (_CALIBRATION_NETWORK_PATH, _CALIBRATION_LOCAL_PATH):
-        try:
-            data = {}
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-            data[key] = entry
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, sort_keys=True)
-            return path
-        except (OSError, ValueError):
-            continue
-    return None
-
-
-def _resolve_pixel_size_um(camera_kind, objective, sensor_pitch_um):
-    """Real-world um/pixel for this (camera, objective): a saved measured
-    calibration if one exists, else the theoretical pitch/magnification
-    estimate, else None (unknown camera or no objective recorded)."""
-    if camera_kind and objective:
-        data, _ = _load_calibration_store()
-        entry = data.get(_calibration_key(camera_kind, objective))
-        if entry and entry.get('pixel_size_um'):
-            return float(entry['pixel_size_um'])
-    if sensor_pitch_um and objective:
-        return sensor_pitch_um / objective
-    return None
-
+# ── Physical length labels and adaptive scale bars ───────────────────────────
 
 def _format_length_um(length_um):
     """Auto-scaled length string: um below 1 mm, mm at or above it -- objectives
@@ -2581,274 +2578,6 @@ def _position_line_label(label, p0, p1, offset_px=14):
     label.setPos(mx + nx * offset_px, my + ny * offset_px)
 
 
-# "Nice" round scale-bar lengths, in micrometers, to choose from so the bar
-# never reads something awkward like "37 um".
-_SCALE_BAR_STEPS_UM = [1, 2, 5, 10, 20, 50, 100, 200, 500,
-                       1000, 2000, 5000, 10000, 20000, 50000]
-
-
-def _nice_scale_bar_length_um(view_width_um):
-    """Largest step at or under ~22% of the visible width, so the bar reads
-    cleanly without dominating the image."""
-    target = view_width_um * 0.22
-    chosen = _SCALE_BAR_STEPS_UM[0]
-    for step in _SCALE_BAR_STEPS_UM:
-        if step <= target:
-            chosen = step
-        else:
-            break
-    return chosen
-
-
-def _update_scale_bar(view_box, bar_ref, pixel_size_um):
-    """Add/replace a bottom-right scale bar on `view_box`, sized off the
-    CURRENTLY VISIBLE width (view_box.viewRange()), not the full image --
-    so it keeps reading a sensible length as you zoom in/out, not just at
-    the initial fit-to-window view. `bar_ref` is a single-element list
-    holding the current pg.ScaleBar (or None), so this can be called
-    repeatedly (new file, new calibration, zoom/pan) without stacking bars.
-    Removes any existing bar and draws nothing if pixel_size_um is unknown
-    or the view has no visible extent yet."""
-    if bar_ref[0] is not None:
-        try:
-            bar_ref[0].setParentItem(None)
-        except Exception:
-            pass
-        bar_ref[0] = None
-    if not pixel_size_um:
-        return
-    (x0, x1), _y_range = view_box.viewRange()
-    visible_width_px = abs(x1 - x0)
-    if visible_width_px <= 0:
-        return
-    width_um = visible_width_px * pixel_size_um
-    length_um = _nice_scale_bar_length_um(width_um)
-    length_px = length_um / pixel_size_um
-    label = f'{length_um/1000:g} mm' if length_um >= 1000 else f'{length_um:g} \u00b5m'
-    bar = pg.ScaleBar(size=length_px, suffix='m', offset=(-20, -20))
-    bar.text.setText(label)
-    bar.setParentItem(view_box)
-    bar.anchor((1, 1), (1, 1), offset=(-20, -20))
-    bar_ref[0] = bar
-
-
-def _connect_scale_bar_autoscale(view_box, bar_ref, pixel_size_getter):
-    """Keep a scale bar sized to the visible field as the user zooms/pans.
-    `pixel_size_getter` is called fresh on every range change (rather than
-    passing a fixed value) since the current recording/calibration can
-    change without the view itself re-emitting a range change."""
-    view_box.sigRangeChanged.connect(
-        lambda *_a: _update_scale_bar(view_box, bar_ref, pixel_size_getter()))
-
-
-class _CalibrationDialog(QDialog):
-    """Non-modal dialog: measure a feature of known physical length to derive
-    real um/pixel for a given (camera, objective), saved to the shared
-    calibration store (see _save_calibration_entry()).
-
-    Draw mode: click once to set a line's start, click again to set its end
-    -- deliberately two discrete clicks rather than a press-drag-release
-    gesture, so it works the same whether or not the mouse button stays held
-    the whole time. Each finished line stays on screen (no replacement) with
-    its own pixel-length label, so several can be drawn and compared before
-    picking which one to calibrate from.
-    """
-
-    def __init__(self, frame, camera_kind=None, objective=None,
-                 parent=None, stylesheet='', cmap=None):
-        super().__init__(parent)
-        self.setWindowTitle('Measure/Calibrate')
-        self.setMinimumSize(720, 760)
-        if stylesheet:
-            self.setStyleSheet(stylesheet)
-
-        self._frame = np.asarray(frame)
-        self._draw_mode = False
-        self._pending_start = None   # (x, y) image coords after the first click
-        self._lines = []             # [{'roi', 'label', 'length_px'}, ...]
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(6)
-        layout.setContentsMargins(10, 10, 10, 10)
-
-        layout.addWidget(QLabel(
-            'Draw a line across a feature of known physical length (a stage '
-            'micrometer, a ruler, etc.), enter that length in micrometers, '
-            'then calibrate. Saved per camera + objective, reused '
-            'automatically for recordings taken with the same setup.'))
-
-        cam_row = QHBoxLayout()
-        cam_row.addWidget(QLabel('Camera:'))
-        self._camera_combo = QComboBox()
-        self._camera_combo.addItems(['ORCA-Fire', 'Lucid'])
-        self._camera_combo.setCurrentIndex(1 if camera_kind == 'lucid' else 0)
-        self._camera_combo.currentIndexChanged.connect(self._refresh_all_line_labels)
-        cam_row.addWidget(self._camera_combo)
-        cam_row.addWidget(QLabel('Objective (x):'))
-        self._objective_spin = QDoubleSpinBox()
-        self._objective_spin.setRange(0.1, 1000.0)
-        self._objective_spin.setDecimals(2)
-        self._objective_spin.setValue(objective if objective else 5.0)
-        self._objective_spin.valueChanged.connect(self._refresh_all_line_labels)
-        cam_row.addWidget(self._objective_spin)
-        cam_row.addStretch()
-        layout.addLayout(cam_row)
-
-        self._view = pg.ImageView()
-        self._view.ui.roiBtn.hide()
-        self._view.ui.menuBtn.hide()
-        self._view.setMinimumHeight(360)
-        layout.addWidget(self._view)
-        levels = (float(np.percentile(self._frame, 2)), float(np.percentile(self._frame, 98)))
-        self._view.setImage(self._frame, levels=levels, autoHistogramRange=False)
-        apply_colormap_to_view(self._view, cmap)
-        self._view.getView().scene().sigMouseClicked.connect(self._on_scene_clicked)
-
-        btn_row = QHBoxLayout()
-        self._draw_btn = QPushButton('Draw line')
-        self._draw_btn.setCheckable(True)
-        self._draw_btn.setToolTip(
-            'Click once on the image to start a line, click again to end it. '
-            'Stays on to draw more lines until toggled off.')
-        self._draw_btn.toggled.connect(self._on_draw_toggled)
-        btn_row.addWidget(self._draw_btn)
-        clear_btn = QPushButton('Clear all lines')
-        clear_btn.clicked.connect(self._clear_lines)
-        btn_row.addWidget(clear_btn)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
-
-        self._list = QListWidget()
-        self._list.setMaximumHeight(110)
-        layout.addWidget(self._list)
-
-        calib_row = QHBoxLayout()
-        calib_row.addWidget(QLabel('Known length:'))
-        self._length_spin = QDoubleSpinBox()
-        self._length_spin.setRange(0.001, 1e7)
-        self._length_spin.setDecimals(3)
-        self._length_spin.setValue(100.0)
-        calib_row.addWidget(self._length_spin)
-        # 2x-20x objectives here mean a calibration target can reasonably be
-        # anywhere from single-digit um to several mm -- don't force one unit.
-        self._length_unit_combo = QComboBox()
-        self._length_unit_combo.addItems(['µm', 'mm'])
-        calib_row.addWidget(self._length_unit_combo)
-        calib_btn = QPushButton('Calibrate from selected line')
-        calib_btn.clicked.connect(self._calibrate_from_selected)
-        calib_row.addWidget(calib_btn)
-        calib_row.addStretch()
-        layout.addLayout(calib_row)
-
-        self._status_lbl = QLabel('')
-        self._status_lbl.setWordWrap(True)
-        layout.addWidget(self._status_lbl)
-
-        close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        close_box.rejected.connect(self.reject)
-        layout.addWidget(close_box)
-
-    def _on_draw_toggled(self, checked):
-        self._draw_mode = checked
-        self._pending_start = None
-        # Disable pan/zoom-by-drag while drawing, so a click meant to place
-        # a line endpoint doesn't also drag the view.
-        self._view.getView().setMouseEnabled(x=not checked, y=not checked)
-
-    def _on_scene_clicked(self, ev):
-        if not self._draw_mode:
-            return
-        pos = self._view.getView().mapSceneToView(ev.scenePos())
-        x, y = pos.x(), pos.y()
-        if self._pending_start is None:
-            self._pending_start = (x, y)
-        else:
-            self._finish_line(self._pending_start, (x, y))
-            self._pending_start = None
-
-    def _finish_line(self, p0, p1):
-        roi = pg.LineSegmentROI([p0, p1], pen=pg.mkPen('#ffcc00', width=2))
-        self._view.getView().addItem(roi)
-        label = pg.TextItem('', color='#ffffff', anchor=(0.5, 0.5))
-        label.setFont(_line_label_font())
-        self._view.getView().addItem(label)
-        entry = {'roi': roi, 'label': label, 'length_px': 0.0}
-        self._lines.append(entry)
-        self._list.addItem('')
-        roi.sigRegionChanged.connect(lambda _r, e=entry: self._on_line_changed(e))
-        self._on_line_changed(entry)
-
-    def _current_pixel_size_um(self):
-        camera_kind = 'lucid' if self._camera_combo.currentIndex() == 1 else 'orcafire'
-        sensor_pitch_um = _LUCID_PIXEL_UM if camera_kind == 'lucid' else _ORCAFIRE_PIXEL_UM
-        return _resolve_pixel_size_um(camera_kind, self._objective_spin.value(), sensor_pitch_um)
-
-    def _refresh_all_line_labels(self, *_args):
-        for entry in self._lines:
-            self._on_line_changed(entry)
-
-    def _on_line_changed(self, entry):
-        # roi.listPoints() returns handle positions in the ROI's OWN local
-        # coordinate system -- unaffected by dragging the ROI's body (only
-        # handle drags move them). mapToParent() puts them in the same
-        # (view-box) coordinates the label itself lives in, so the label
-        # tracks a whole-line drag too, not just handle drags.
-        roi = entry['roi']
-        pts = roi.listPoints()
-        p0, p1 = roi.mapToParent(pts[0]), roi.mapToParent(pts[1])
-        length_px = ((p1.x() - p0.x()) ** 2 + (p1.y() - p0.y()) ** 2) ** 0.5
-        entry['length_px'] = length_px
-        _position_line_label(entry['label'], p0, p1)
-
-        pixel_size_um = self._current_pixel_size_um()
-        if pixel_size_um:
-            text = f'~{_format_length_um(length_px * pixel_size_um)}  ({length_px:.1f} px)'
-        else:
-            text = f'{length_px:.1f} px'
-        entry['label'].setText(text)
-        idx = self._lines.index(entry)
-        self._list.item(idx).setText(f'Line {idx + 1}: {text}')
-
-    def _clear_lines(self):
-        view = self._view.getView()
-        for entry in self._lines:
-            view.removeItem(entry['roi'])
-            view.removeItem(entry['label'])
-        self._lines = []
-        self._list.clear()
-
-    def _calibrate_from_selected(self):
-        idx = self._list.currentRow()
-        if idx < 0 or idx >= len(self._lines):
-            QMessageBox.information(self, 'Calibrate', 'Select a line from the list first.')
-            return
-        length_px = self._lines[idx]['length_px']
-        if length_px <= 0:
-            QMessageBox.warning(self, 'Calibrate', 'That line has zero length.')
-            return
-        known_um = self._length_spin.value()
-        if self._length_unit_combo.currentText() == 'mm':
-            known_um *= 1000.0
-        pixel_size_um = known_um / length_px
-        camera_kind = 'lucid' if self._camera_combo.currentIndex() == 1 else 'orcafire'
-        objective = self._objective_spin.value()
-        sensor_pitch_um = _LUCID_PIXEL_UM if camera_kind == 'lucid' else _ORCAFIRE_PIXEL_UM
-        true_magnification = sensor_pitch_um / pixel_size_um
-        path = _save_calibration_entry(
-            camera_kind, objective, pixel_size_um,
-            extra={'line_length_px': length_px, 'known_length_um': known_um,
-                   'true_magnification': true_magnification})
-        if path:
-            self._status_lbl.setText(
-                f'Saved {pixel_size_um:.4f} µm/px for {self._camera_combo.currentText()} '
-                f'@ nominal {objective:g}x (true magnification ≈ {true_magnification:.2f}x) '
-                f'→ {path}')
-        else:
-            QMessageBox.warning(self, 'Calibrate',
-                                'Could not write the calibration file (network share and '
-                                'local fallback both failed).')
-
-
 class _FFTDialog(QDialog):
     """Non-modal dialog: pick a rectangular FOV on the current frame and inspect
     its 2D FFT power spectrum, to help find the dominant spatial-frequency band
@@ -2878,18 +2607,11 @@ class _FFTDialog(QDialog):
 
         if pixel_size_um:
             calib_text = (
-                f'Calibrated: {sensor_pixel_um} µm sensor pixel size → '
-                f'{pixel_size_um:.4f} µm/px at the sample.')
-        elif sensor_pixel_um:
-            calib_text = (
-                "No objective magnification in this recording's metadata -- "
-                'showing cycles/pixel. Set Camera → Microscope Objective (or '
-                'Config → Microscope Objective) in the acquisition app for '
-                'real spatial-frequency units.')
+                f'Calibrated sample scale: {pixel_size_um:.6g} µm/px.')
         else:
             calib_text = (
-                "Camera not recognized from this recording's metadata -- "
-                'showing cycles/pixel.')
+                'No recording scale available — showing cycles/pixel. '
+                'Use Tools → Set Scale… in the main viewer to calibrate distances.')
         layout.addWidget(QLabel(calib_text))
 
         # ── source image with draggable/resizable FOV ROI ──────────────────────
@@ -3262,6 +2984,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
     def __init__(self):
         super().__init__()
         self._settings          = QSettings(self.SETTINGS_ORG, self.SETTINGS_APP)
+        self._spatial_scale = SpatialCalibration(self._settings, self)
+        self._scale_dialog = None
         self._reader            = None
         self._path              = None
         self._sidecar_fps       = None
@@ -3295,7 +3019,19 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._white_field       = None   # float32 (H, W) averaged white frame, or None
         self._white_field_gain  = None   # float, average gain (dB) the white was captured at
         self._white_field_error = None   # str error message, or None
-        self._white_mode        = 'none' # 'none' | 'flat' | 'pca'
+        self._white_mode        = 'none' # 'none' | 'flat' | 'pca' | 'median'
+        self._median_worker = None
+        self._median_pending = None
+        self._median_revision = 0
+        self._median_cache = {}
+        self._median_display_pending = False
+        self._median_auto_levels_pending = False
+        self._median_closing = False
+        self._median_last_status = ''
+        self._median_debounce = QTimer(self)
+        self._median_debounce.setSingleShot(True)
+        self._median_debounce.setInterval(150)
+        self._median_debounce.timeout.connect(self._refresh_current_frame)
         self._pca_mean          = None   # (H*W,) float32 mean of white frames
         self._pca_components    = None   # (n_stored, H*W) float32 eigenvectors
         self._pca_shape         = None   # (H, W) for which PCA was computed
@@ -3327,6 +3063,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._play_start_wall   = 0.0    # time.monotonic() when play started
         self._play_start_ts_idx = 0      # frame index at play start
         self._auto_levels_done  = False  # True after first frame of each file is shown
+        self._density_retrieval_window = None
+        self._density_close_pending = False
 
         self.setWindowTitle('Single-frame PCI Viewer')
         self.resize(1300, 860)
@@ -3335,6 +3073,17 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self.setWindowIcon(QIcon(_ico))
         self._build_ui()
         self._pixel_inspector = PixelInspector(self.imview)
+        self._measurements = MeasurementOverlay(self.imview, self._spatial_scale, self)
+        self.measure_btn.toggled.connect(self._measure_toggled)
+        self.clear_measurements_btn.clicked.connect(self._measurements.clear_measurements)
+        self._measurements.drawing_changed.connect(self._measurement_drawing_changed)
+        self._measurements.count_changed.connect(self._measurement_count_changed)
+        self._measurements.image_available_changed.connect(self.measure_btn.setEnabled)
+        self._measurements.message.connect(self.statusBar().showMessage)
+        self._spatial_scale.changed.connect(self._spatial_scale_changed)
+        self._spatial_scale_changed()
+        self._measurement_escape = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self._measurement_escape.activated.connect(self._measurements.cancel_drawing)
         self._connect()
         self.setStyleSheet(_DARK_STYLE)
         self._restore_settings()
@@ -3399,14 +3148,19 @@ class LucidViewer(ViewerMixin, QMainWindow):
         config_menu.addAction(trigger_settings_act)
 
         tools_menu = self.menuBar().addMenu('&Tools')
+        scale_act = QAction('Set &Scale…', self)
+        scale_act.setStatusTip('Calibrate image distances or load a saved spatial scale')
+        scale_act.triggered.connect(self._open_scale_dialog)
+        tools_menu.addAction(scale_act)
+        tools_menu.addSeparator()
         fft_act = QAction('&FFT (spatial frequency)…', self)
         fft_act.setStatusTip('Pick a FOV on the current frame and view its 2D FFT')
         fft_act.triggered.connect(self._open_fft_dialog)
         tools_menu.addAction(fft_act)
-        calib_act = QAction('&Measure/Calibrate…', self)
-        calib_act.setStatusTip('Measure a known-length feature to derive real um/pixel')
-        calib_act.triggered.connect(self._open_calibration_dialog)
-        tools_menu.addAction(calib_act)
+        density_act = QAction('&Density Retrieval…', self)
+        density_act.setStatusTip('Retrieve density or thickness from the corrected active image')
+        density_act.triggered.connect(self._open_density_retrieval)
+        tools_menu.addAction(density_act)
 
         help_menu = self.menuBar().addMenu('&Help')
         manual_act = QAction('&Manual', self)
@@ -3557,13 +3311,27 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.white_chk = QCheckBox('White field')
         self.white_chk.setToolTip('Enable white-field correction using the selected technique.')
         self.white_combo = QComboBox()
-        self.white_combo.addItems(['Flat field', 'PCA removal'])
+        self.white_combo.addItems(['Flat field', 'PCA removal', 'Median Filter'])
         self.white_combo.setToolTip(
             'Flat field: divide by averaged white-field frames\n'
             'PCA removal: project each frame onto a PCA basis built from white-field\n'
             '  frames and subtract the estimated background\n\n'
-            'Disabled options mean no compatible white_field folder was found.'
+            'Median Filter: estimate a synthetic white field from each image;\n'
+            '  relative local contrast only; no white_field folder needed.\n\n'
+            'Disabled Flat/PCA options mean no compatible white_field folder was found.'
         )
+        self._median_patch_lbl = QLabel("Patch size:")
+        self.median_patch_spin = QSpinBox()
+        self.median_patch_spin.setRange(1, 4096)
+        self.median_patch_spin.setValue(100)
+        self.median_patch_spin.setSuffix(" px")
+        self.median_patch_spin.setKeyboardTracking(False)
+        self.median_patch_spin.setToolTip(
+            "Approximate square median patch in source pixels. The float background is\n"
+            "estimated on an area-reduced grid and interpolated back. Only the white\n"
+            "field is reduced; source pixels retain full resolution. Overall attenuation is lost.")
+        self._median_patch_lbl.hide()
+        self.median_patch_spin.hide()
         self._pca_n_lbl = QLabel('N components:')
         self._pca_n_lbl.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         self._pca_n_lbl.setVisible(False)
@@ -3610,9 +3378,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         corr_grid.addWidget(self._pca_n_lbl,             3, 0)
         corr_grid.addWidget(self.pca_n_spin,             3, 1)
         corr_grid.addWidget(self._pca_settings_btn,      4, 0, 1, 2)
-        corr_grid.addWidget(self.corr_status_lbl,        5, 0, 1, 2)
-        corr_grid.addWidget(self._corr_progress,         6, 0, 1, 2)
-        corr_grid.addWidget(self.store_fields_btn,       7, 0, 1, 2)
+        corr_grid.addWidget(self._median_patch_lbl,      5, 0)
+        corr_grid.addWidget(self.median_patch_spin,      5, 1)
+        corr_grid.addWidget(self.corr_status_lbl,        6, 0, 1, 2)
+        corr_grid.addWidget(self._corr_progress,         7, 0, 1, 2)
+        corr_grid.addWidget(self.store_fields_btn,       8, 0, 1, 2)
         sb.addWidget(corr_box)
 
         sb.addStretch()
@@ -3629,7 +3399,25 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.frame_title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         rv.addWidget(self.frame_title_label)
 
-        self.imview = pg.ImageView()
+        measurement_bar = QHBoxLayout()
+        measurement_bar.setContentsMargins(8, 3, 8, 3)
+        measurement_bar.setSpacing(8)
+        self.measure_btn = QPushButton('Measure')
+        self.measure_btn.setCheckable(True)
+        self.measure_btn.setEnabled(False)
+        self.measure_btn.setToolTip('Draw a measurement line, then drag either endpoint to refine it. Escape cancels.')
+        self.measure_btn.setStyleSheet('QPushButton:checked { background: #294653; border-color: #74cee8; color: #d6f5ff; }')
+        self.clear_measurements_btn = QPushButton('Clear Measurements')
+        self.clear_measurements_btn.setEnabled(False)
+        self.scale_label = QLabel()
+        self.scale_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.scale_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.scale_label.setStyleSheet('color: #a9b5bc; padding-left: 6px;')
+        measurement_bar.addWidget(self.measure_btn)
+        measurement_bar.addWidget(self.clear_measurements_btn)
+        measurement_bar.addWidget(self.scale_label, 1)
+        rv.addLayout(measurement_bar)
+        self.imview = pg.ImageView(view=LineDrawingViewBox())
         rv.addWidget(self.imview)
 
         self._mask_item = pg.ImageItem()
@@ -3637,8 +3425,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.imview.getView().addItem(self._mask_item)
         _connect_scale_bar_autoscale(
             self.imview.getView(), self._scale_bar_ref,
-            lambda: _resolve_pixel_size_um(
-                self._camera_kind, self._sidecar_objective, self._sidecar_pixel_pitch_um))
+            lambda: self._spatial_scale.pitch_um)
 
         # Frame slider (for lazy loading; hides pyqtgraph's built-in timeline
         # when the full stack is not loaded)
@@ -3681,6 +3468,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.white_chk.toggled.connect(self._on_white_chk_toggled)
         self.white_combo.currentIndexChanged.connect(self._on_white_combo_changed)
         self.pca_n_spin.valueChanged.connect(self._on_pca_n_changed)
+        self.median_patch_spin.valueChanged.connect(self._on_median_patch_changed)
         self._pca_settings_btn.clicked.connect(self._open_pca_settings)
         self._pca_settings_btn.setContextMenuPolicy(
             Qt.ContextMenuPolicy.CustomContextMenu)
@@ -3809,6 +3597,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         else:
             self._camera_kind = None
             self._sidecar_pixel_pitch_um = None
+        try:
+            pitch = float(self._sidecar_pixel_pitch_um) / float(self._sidecar_objective)
+        except (TypeError, ValueError, ZeroDivisionError):
+            pitch = None
+        self._spatial_scale.set_recording_scale(pitch)
         self._timestamps, self._ts_unit, self._gains, self._exposures, self._line_statuses = _load_timestamps(path)
 
         # Fall back to filename hint for pixel format if sidecar didn't provide it
@@ -3903,6 +3696,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._open_reader()
 
     def _open_reader(self):
+        self._invalidate_median()
+        if self._density_retrieval_window is not None:
+            self._density_retrieval_window.clear_frame()
         if self._reader is not None:
             try:
                 self._reader.close()
@@ -4107,7 +3903,15 @@ class LucidViewer(ViewerMixin, QMainWindow):
         frame = self._cache[idx]
         data_gain = (self._gains[idx] if self._gains is not None and idx < len(self._gains)
                      else None)
+        self._invalidate_median(clear_cache=False)
+        if self._white_mode == "median":
+            self._request_median_frame(frame, idx, data_gain)
+            return
+        self._median_display_pending = False
         display_frame = self._apply_field_correction(frame, data_gain=data_gain)
+        self._render_frame(frame, display_frame, idx)
+
+    def _render_frame(self, frame, display_frame, idx):
         auto = not self._auto_levels_done
         self._auto_levels_done = True
         self.imview.setImage(display_frame, autoLevels=auto, autoRange=False)
@@ -4115,10 +3919,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
             # Only recompute on a fresh file load (auto-levels reset), not
             # every frame scrub within the same recording -- pixel size only
             # depends on which file/objective is open, not the frame index.
-            pixel_size_um = _resolve_pixel_size_um(
-                self._camera_kind, self._sidecar_objective, self._sidecar_pixel_pitch_um)
+            pixel_size_um = self._spatial_scale.pitch_um
             _update_scale_bar(self.imview.getView(), self._scale_bar_ref, pixel_size_um)
         self._pixel_inspector.update(display_frame)
+        self._measurements.set_image_shape(display_frame.shape)
         self._apply_colormap(self.cmap_combo.currentText())
         self._update_mask(frame)
 
@@ -4147,6 +3951,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.frame_slider.blockSignals(True)
         self.frame_slider.setValue(idx)
         self.frame_slider.blockSignals(False)
+        self._push_density_frame(display_frame, idx)
+        if self._white_mode == "median" and self._median_auto_levels_pending:
+            self._median_auto_levels_pending = False
+            self._auto_levels()
 
         self.statusBar().showMessage(
             f'Frame {idx + 1} / {n}  |  '
@@ -4208,6 +4016,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         return elapsed_s  # 's' or no unit
 
     def _play_tick(self):
+        # Allow a median frame to finish before following the playback clock.
+        # Otherwise a filter slower than the timer never commits any image.
+        if self._white_mode == "median" and (self._median_worker is not None
+                or self._median_debounce.isActive()):
+            return
         if self._reader is None:
             self._stop_play()
             return
@@ -4229,8 +4042,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if idx != self.frame_slider.value():
             self._show_frame(idx)
 
-        if idx >= n - 1:
-            self._start_play()  # loop back to frame 0 while play is active
+        if idx >= n - 1 and not (self._white_mode == "median" and self._median_display_pending):
+            self._start_play()  # loop after the last requested frame has been committed
 
     def _on_roi_dragged(self):
         if self.imview.ui.roiBtn.isChecked():
@@ -4640,6 +4453,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._auto_levels()
 
     def _on_white_flat_loaded(self, data, folder, error):
+        if self._white_mode == "median":
+            return
         if data is None:
             self.corr_status_lbl.setText(f'White field: {error}')
             self.white_chk.blockSignals(True)
@@ -4671,7 +4486,28 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._on_white_mode_changed(idx + 1)
 
     def _on_white_mode_changed(self, index):
-        """Handle white field mode: 0=None, 1=Flat field, 2=PCA removal."""
+        """Handle 0=None, 1=Flat field, 2=PCA removal, 3=Median Filter."""
+        self._invalidate_median()
+        self._median_patch_lbl.setVisible(index == 3)
+        self.median_patch_spin.setVisible(index == 3)
+        self._median_last_status = ""
+        if index != 3:
+            self._median_auto_levels_pending = False
+        if index == 3:
+            self._white_mode = "median"
+            self._white_field = self._white_field_gain = self._white_field_error = None
+            self._pca_mean = self._pca_components = None
+            self._pca_mean_low = self._pca_components_low = None
+            self._pca_n_lbl.hide()
+            self.pca_n_spin.hide()
+            self._pca_settings_btn.hide()
+            self._white_field_info_lbl.setText("Synthetic")
+            self._white_field_info_lbl.setToolTip(
+                "Approximate median white field; relative local contrast, not absolute transmission.")
+            self._auto_levels_done = False
+            self._refresh_corr_status()
+            self._refresh_current_frame()
+            return
         if index == 0:
             self._white_mode        = 'none'
             self._white_field       = None
@@ -4745,7 +4581,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 pca_ok = True
 
         model = self.white_combo.model()
-        for i, enabled in enumerate([flat_ok, pca_ok]):
+        for i, enabled in enumerate([flat_ok, pca_ok, self._reader is not None]):
             item = model.item(i)
             if enabled:
                 item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
@@ -5029,6 +4865,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._launch_initial_frame_refresh()
 
     def _on_pca_progress(self, msg):
+        if self._white_mode == "median":
+            return
         self.corr_status_lbl.setText(msg)
         self.corr_status_lbl.setStyleSheet('color: #aaa; font-size: 10px;')
 
@@ -5038,7 +4876,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _hide_corr_progress(self):
         """Call from every terminal slot (done or error) of those workers."""
-        self._corr_progress.setVisible(False)
+        if self._median_worker is None:
+            self._corr_progress.setVisible(False)
 
     def _launch_initial_frame_refresh(self):
         """Redraw the currently-displayed frame with the correction that just
@@ -5218,6 +5057,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     def _on_cell_adapted(self, cell_mean, e_high_cell, mu_low_cell, q_low, folder):
         """Slot adapted eigenvectors into the projection pipeline."""
+        if self._white_mode == "median":
+            self._hide_corr_progress()
+            return
         if cell_mean is None:
             self._hide_corr_progress()
             self.corr_status_lbl.setText('Cell adaptation failed — check console')
@@ -5350,6 +5192,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         dlg.exec()
 
     def _on_pca_error(self, msg):
+        if self._white_mode == "median":
+            self._hide_corr_progress()
+            return
         self._hide_corr_progress()
         self.corr_status_lbl.setText(f'PCA error: {msg}')
         self.corr_status_lbl.setStyleSheet('color: #ff6b6b; font-size: 10px;')
@@ -5398,6 +5243,16 @@ class LucidViewer(ViewerMixin, QMainWindow):
                     self.pca_n_spin.setVisible(combo_idx == 1)
                     self._pca_settings_btn.setVisible(combo_idx == 1)
 
+        if white_mode == "median":
+            self.white_combo.blockSignals(True)
+            self.white_combo.setCurrentIndex(2)
+            self.white_combo.blockSignals(False)
+            self.white_chk.blockSignals(True)
+            self.white_chk.setChecked(True)
+            self.white_chk.blockSignals(False)
+            self.median_patch_spin.setValue(int(refs.get("median_patch_size_px", 100)))
+            self._median_patch_lbl.show()
+            self.median_patch_spin.show()
         if white_mode == 'pca' and refs.get('pca_universal'):
             master = refs.get('white_pca_master_folder', '')
             if master and os.path.isdir(master):
@@ -5463,6 +5318,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
             if self._pca_universal and self._pca_master_folder:
                 updates['white_pca_master_folder'] = self._pca_master_folder
                 updates['pca_universal'] = True
+        if self._white_mode == "median":
+            updates["white_mode"] = "median"
+            updates["median_patch_size_px"] = self.median_patch_spin.value()
         if not updates:
             self.corr_status_lbl.setText('No active fields to store')
             self.corr_status_lbl.setStyleSheet('color: #888; font-size: 10px;')
@@ -5646,6 +5504,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 self._set_dark_field_info()
 
         mode_idx = (self.white_combo.currentIndex() + 1) if self.white_chk.isChecked() else 0
+        self._median_patch_lbl.setVisible(mode_idx == 3)
+        self.median_patch_spin.setVisible(mode_idx == 3)
         if mode_idx != 2:
             self._pca_n_lbl.setVisible(False)
             self.pca_n_spin.setVisible(False)
@@ -5664,6 +5524,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
                 self._set_white_field_info()
         elif mode_idx == 2:
             self._compute_or_load_pca()
+        elif mode_idx == 3:
+            self._on_white_mode_changed(3)
+            return
         else:
             self._white_mode        = 'none'
             self._white_field       = None
@@ -5701,6 +5564,10 @@ class LucidViewer(ViewerMixin, QMainWindow):
             else:
                 parts.append('PCA …')
 
+        if self._white_mode == "median":
+            parts.append(f"Median ~{self.median_patch_spin.value()} px — relative contrast only")
+            if self._median_last_status:
+                parts.append(self._median_last_status)
         self.corr_status_lbl.setText('  '.join(parts))
         color = '#ff6b6b' if has_error else '#888'
         self.corr_status_lbl.setStyleSheet(f'color: {color}; font-size: 10px;')
@@ -5711,8 +5578,99 @@ class LucidViewer(ViewerMixin, QMainWindow):
             (self._white_mode == 'flat' and self._white_field is not None
              and not self._white_field_error)
             or (self._white_mode == 'pca' and self._pca_components is not None)
+            or self._white_mode == "median"
         )
         self.store_fields_btn.setEnabled(dark_storable or white_storable)
+
+    # Median correction: one running worker and one latest pending frame.
+    def _invalidate_median(self, clear_cache=True):
+        self._median_revision += 1
+        self._median_pending = None
+        self._median_debounce.stop()
+        if clear_cache:
+            self._median_cache.clear()
+        if self._median_worker is not None:
+            self._median_worker.requestInterruption()
+
+    def _on_median_patch_changed(self, value):
+        if self._white_mode == "median":
+            self._invalidate_median()
+            self._median_display_pending = True
+            self._median_debounce.start()
+            if self._density_retrieval_window is not None:
+                self._density_retrieval_window.clear_frame()
+
+    def _request_median_frame(self, frame, idx, data_gain):
+        dark = self._dark_field if not self._dark_field_error else None
+        patch_size = self.median_patch_spin.value()
+        key = (id(self._reader), idx, patch_size, id(dark), self._dark_field_gain, data_gain)
+        cached = self._median_cache.get(key)
+        if cached is not None:
+            self._median_display_pending = False
+            self._render_frame(frame, cached.image, idx)
+            self._median_last_status = f"{cached.backend.upper()} (cached)"
+            self._refresh_corr_status()
+            return
+        self._median_display_pending = True
+        self.frame_slider.blockSignals(True)
+        self.frame_slider.setValue(idx)
+        self.frame_slider.blockSignals(False)
+        self.frame_label.setText(f"Processing frame {idx+1} / {self._reader_len()}…")
+        if self._density_retrieval_window is not None:
+            self._density_retrieval_window.clear_frame()
+        self._median_pending = dict(request_id=self._median_revision, frame_index=idx,
+            cache_key=key, frame=frame, patch_size=patch_size, dark=dark,
+            dark_gain=self._dark_field_gain, data_gain=data_gain)
+        self._median_last_status = "Computing…"
+        self._refresh_corr_status()
+        self._show_corr_progress()
+        self._start_median_worker()
+
+    def _start_median_worker(self):
+        if self._median_worker is not None or self._median_pending is None or self._median_closing:
+            return
+        request = self._median_pending
+        self._median_pending = None
+        worker = MedianCorrectionWorker(parent=self, **request)
+        worker.result_ready.connect(self._on_median_result)
+        worker.failed.connect(self._on_median_error)
+        worker.finished.connect(self._on_median_finished)
+        self._median_worker = worker
+        worker.start()
+
+    def _on_median_result(self, request_id, result):
+        worker = self._median_worker
+        if (worker is None or request_id != self._median_revision
+                or self._white_mode != "median" or self._median_closing):
+            return
+        if len(self._median_cache) >= 2:
+            self._median_cache.pop(next(iter(self._median_cache)))
+        self._median_cache[worker.cache_key] = result
+        self._median_display_pending = False
+        self._median_last_status = f"{result.backend.upper()} {result.elapsed_ms:.0f} ms"
+        if result.invalid_pixels:
+            self._median_last_status += f"; {result.invalid_pixels} invalid-background pixels masked"
+        self._render_frame(worker.frame, result.image, worker.frame_index)
+        self._refresh_corr_status()
+
+    def _on_median_error(self, request_id, message):
+        if request_id == self._median_revision and self._white_mode == "median" and not self._median_closing:
+            self._stop_play()
+            self.corr_status_lbl.setText("Median correction failed: " + message)
+            self.corr_status_lbl.setStyleSheet("color: #ff6b6b; font-size: 10px;")
+            self.statusBar().showMessage("Median correction failed: " + message)
+
+    def _on_median_finished(self):
+        worker = self._median_worker
+        self._median_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        if self._median_closing:
+            QTimer.singleShot(0, self.close)
+        elif self._median_pending is not None:
+            self._start_median_worker()
+        else:
+            self._hide_corr_progress()
 
     def _refresh_current_frame(self):
         if self._reader is not None:
@@ -5726,6 +5684,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         true transmission values, not the 12-bit-mapped codes that get written
         to disk on export). With no correction the raw frame is returned.
         """
+        if self._white_mode == "median":
+            dark = self._dark_field if not self._dark_field_error else None
+            return correct_median_white(
+                frame, self.median_patch_spin.value(), dark=dark,
+                dark_gain=self._dark_field_gain, data_gain=data_gain).image
         if self._white_mode == 'pca':
             if self._pca_components is None or self._pca_mean is None:
                 return frame
@@ -5750,7 +5713,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
 
     # ── Display ───────────────────────────────────────────────────────────────
     def _apply_colormap(self, name: str):
-        apply_colormap_to_view(self.imview, get_colormap(name))
+        cm = get_colormap(name)
+        apply_colormap_to_view(self.imview, cm)
+        window = self._density_retrieval_window
+        if window is not None and not window.is_closing:
+            window.set_colormap(cm)
 
     def _current_colormap(self):
         """The main viewer's current colormap, so dialogs with their own
@@ -5761,13 +5728,21 @@ class LucidViewer(ViewerMixin, QMainWindow):
         """Set display levels to the 3rd / 97th percentile of the current display frame."""
         if self._reader is None:
             return
-        idx = self.frame_slider.value()
-        frame = self._cache.get(idx)
-        if frame is None:
-            return
-        data_gain = (self._gains[idx] if self._gains is not None and idx < len(self._gains)
-                     else None)
-        display_frame = self._apply_field_correction(frame, data_gain=data_gain)
+        if self._white_mode == "median":
+            if self._median_display_pending:
+                self._median_auto_levels_pending = True
+                return
+            display_frame = self.imview.image
+            if display_frame is None:
+                return
+        else:
+            idx = self.frame_slider.value()
+            frame = self._cache.get(idx)
+            if frame is None:
+                return
+            data_gain = (self._gains[idx] if self._gains is not None and idx < len(self._gains)
+                         else None)
+            display_frame = self._apply_field_correction(frame, data_gain=data_gain)
         lo = float(np.percentile(display_frame, 3))
         hi = float(np.percentile(display_frame, 97))
         if hi <= lo:
@@ -5793,35 +5768,110 @@ class LucidViewer(ViewerMixin, QMainWindow):
             if self._reader is not None:
                 self._open_reader()
 
+    def _open_scale_dialog(self):
+        if self._scale_dialog is None:
+            self._scale_dialog = SetScaleDialog(self._spatial_scale, self._measurements, self)
+        self._scale_dialog.show()
+        self._scale_dialog.raise_()
+        self._scale_dialog.activateWindow()
+
+    def _spatial_scale_changed(self):
+        _update_scale_bar(self.imview.getView(), self._scale_bar_ref, self._spatial_scale.pitch_um)
+        self.scale_label.setText(self._spatial_scale.description)
+        self.scale_label.setToolTip('Tools → Set Scale… changes this calibration. Manual scale persists across recordings.')
+        window = self._density_retrieval_window
+        if window is not None and not window.is_closing:
+            from density_retrieval import RetrievalParameters
+            pitch = self._spatial_scale.pitch_um or RetrievalParameters().pixel_size_um
+            window.pixel_input.setValue(pitch)
+
+    def _measure_toggled(self, checked):
+        if checked:
+            self._measurements.start_drawing('measure')
+        elif self._measurements.mode == 'measure':
+            self._measurements.cancel_drawing()
+
+    def _measurement_drawing_changed(self, mode):
+        self.measure_btn.blockSignals(True)
+        self.measure_btn.setChecked(mode == 'measure')
+        self.measure_btn.setText('Draw on Image…' if mode == 'measure' else 'Measure')
+        self.measure_btn.blockSignals(False)
+        # The built-in mean ROI should not consume drags while a line is armed.
+        self.imview.roi.setEnabled(mode is None)
+
+    def _measurement_count_changed(self, count):
+        self.clear_measurements_btn.setEnabled(count > 0)
+
     def _open_fft_dialog(self):
+        if self._median_display_pending:
+            self.statusBar().showMessage("Wait for the median correction to finish.")
+            return
         frame = self.imview.image
         if frame is None:
             QMessageBox.information(self, 'FFT', 'Open a file and load a frame first.')
             return
-        pixel_size_um = _resolve_pixel_size_um(
-            self._camera_kind, self._sidecar_objective, self._sidecar_pixel_pitch_um)
+        pixel_size_um = self._spatial_scale.pitch_um
         dlg = _FFTDialog(frame, pixel_size_um=pixel_size_um,
                           sensor_pixel_um=self._sidecar_pixel_pitch_um,
                           parent=self, stylesheet=_DARK_STYLE,
                           cmap=self._current_colormap())
         dlg.exec()
 
-    def _open_calibration_dialog(self):
+    def _open_density_retrieval(self):
         frame = self.imview.image
         if frame is None:
-            QMessageBox.information(self, 'Measure/Calibrate',
+            QMessageBox.information(self, 'Density Retrieval',
                                     'Open a file and load a frame first.')
             return
-        dlg = _CalibrationDialog(frame, camera_kind=self._camera_kind,
-                                 objective=self._sidecar_objective,
-                                 parent=self, stylesheet=_DARK_STYLE,
-                                 cmap=self._current_colormap())
-        dlg.exec()
-        # A calibration just saved may change this recording's own pixel
-        # size (if its camera/objective matches), so redraw the scale bar.
-        pixel_size_um = _resolve_pixel_size_um(
-            self._camera_kind, self._sidecar_objective, self._sidecar_pixel_pitch_um)
-        _update_scale_bar(self.imview.getView(), self._scale_bar_ref, pixel_size_um)
+        window = self._density_retrieval_window
+        if window is None:
+            missing = missing_retrieval_dependencies()
+            if missing:
+                QMessageBox.warning(self, 'Density Retrieval unavailable',
+                                    retrieval_unavailable_message(missing))
+                return
+            try:
+                from density_retrieval_window import DensityRetrievalWindow
+                window = DensityRetrievalWindow(parent=self, stylesheet=_DARK_STYLE)
+                window.set_colormap(self._current_colormap())
+                window.closed.connect(self._on_density_retrieval_closed)
+                self._density_retrieval_window = window
+                # Use corrected float transmission before display contrast or masks.
+                self._push_density_frame(frame, self.frame_slider.value())
+            except Exception as exc:
+                if window is not None:
+                    window.close()
+                self._density_retrieval_window = None
+                QMessageBox.warning(self, 'Density Retrieval unavailable',
+                                    retrieval_unavailable_message(error=exc))
+                return
+        if window.is_closing:
+            self.statusBar().showMessage('Density Retrieval is finishing its current calculation.')
+            return
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _push_density_frame(self, frame, idx):
+        window = self._density_retrieval_window
+        if window is None or window.is_closing:
+            return
+        if self._median_display_pending:
+            window.clear_frame()
+            return
+        pixel_size_um = self._spatial_scale.pitch_um
+        label = f'{os.path.basename(self._path or "Image")} — Frame {idx + 1}'
+        if self._white_mode == "median":
+            label += " — Median synthetic white field (relative contrast only)"
+        window.set_frame(frame, label, pixel_size_um=pixel_size_um,
+                         source_key=self._path)
+        window.source_label.setToolTip(self._path or '')
+
+    def _on_density_retrieval_closed(self):
+        self._density_retrieval_window = None
+        if self._density_close_pending:
+            self._density_close_pending = False
+            QTimer.singleShot(0, self.close)
 
     def _reveal_recording_folder(self):
         if not self._path:
@@ -5840,6 +5890,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         """Filename suffix describing whatever dark/white/PCA correction is
         currently active -- shared by the stack, single-frame, and average-
         frame exporters so a file's name always says what's baked into it."""
+        if self._white_mode == "median":
+            return "_dark_median_white" if self._dark_field is not None else "_median_white"
         if self._white_mode == 'pca' and self._pca_components is not None:
             return '_dark_pca' if self._dark_field is not None else '_pca'
         if self._dark_field is not None and self._white_field is not None:
@@ -5872,6 +5924,16 @@ class LucidViewer(ViewerMixin, QMainWindow):
             correction['white_field'] = os.path.basename(white_folder) if white_folder else 'loaded'
             if self._white_field_gain is not None:
                 correction['white_field_gain_dB'] = self._white_field_gain
+        if self._white_mode == "median":
+            correction.update(white_field_mode="median", absolute_transmission=False,
+                              median_patch_size_px=self.median_patch_spin.value(),
+                              median_method="area_downsample_median_bilinear",
+                              formula="relative_intensity = signal / median_background(signal)",
+                              signal="data - gain_matched_dark" if self._dark_field is not None else "data")
+            if self._reader is not None:
+                shape, kernel = median_plan((self._reader.h, self._reader.w), self.median_patch_spin.value())
+                correction["median_grid_shape_yx"] = list(shape)
+                correction["median_kernel_yx"] = list(kernel)
         if correction and 'formula' not in correction:
             correction['formula'] = (
                 'transmission = (data - dark) / (white - dark)'
@@ -6010,6 +6072,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             pca_blur_enabled=self._pca_blur_enabled,
             pca_blur_sigma=self._pca_blur_sigma,
             pca_cell_gain=self._pca_cell_gain,
+            median_patch_size=self.median_patch_spin.value() if self._white_mode == "median" else None,
         )
         self._export_worker = worker
 
@@ -6061,6 +6124,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         with whatever dark/white/PCA correction is currently active applied
         the same way it is for display -- fast enough to run synchronously,
         no worker thread/progress dialog needed."""
+        if self._median_display_pending:
+            self.statusBar().showMessage("Wait for the median correction to finish before exporting this frame.")
+            return
         if self._reader is None:
             return
         try:
@@ -6075,7 +6141,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
         frame = self._cache[idx] if idx in self._cache else self._reader[idx]
         data_gain = (self._gains[idx] if self._gains is not None and idx < len(self._gains)
                      else None)
-        display_frame = self._apply_field_correction(frame, data_gain=data_gain)
+        display_frame = (self.imview.image if self._white_mode == "median"
+                         else self._apply_field_correction(frame, data_gain=data_gain))
         pixel_bits = _FORMAT_BITS.get(self.fmt_combo.currentText(), 16)
         out, fmin, fmax = self._encode_frame_for_export(display_frame, pixel_bits)
 
@@ -6175,6 +6242,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             pca_blur_enabled=self._pca_blur_enabled,
             pca_blur_sigma=self._pca_blur_sigma,
             pca_cell_gain=self._pca_cell_gain,
+            median_patch_size=self.median_patch_spin.value() if self._white_mode == "median" else None,
         )
         self._avg_export_worker = worker
 
@@ -6220,6 +6288,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         dlg.show()
 
     def _export_gif(self):
+        if self._median_display_pending:
+            self.statusBar().showMessage("Wait for the median correction to finish before choosing GIF levels.")
+            return
         if self._reader is None:
             return
         try:
@@ -6269,6 +6340,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
             pca_blur_enabled=self._pca_blur_enabled,
             pca_blur_sigma=self._pca_blur_sigma,
             pca_cell_gain=self._pca_cell_gain,
+            median_patch_size=self.median_patch_spin.value() if self._white_mode == "median" else None,
             gains=self._gains,
             parent=self,
         )
@@ -6371,6 +6443,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         s.setValue('white_chk_checked',   self.white_chk.isChecked())
         s.setValue('white_combo_index',   self.white_combo.currentIndex())
         s.setValue('pca_n_components',    self.pca_n_spin.value())
+        s.setValue('median/patch_size', self.median_patch_spin.value())
         s.setValue('pca/blur_enabled',    self._pca_blur_enabled)
         s.setValue('pca/blur_sigma',      self._pca_blur_sigma)
         s.setValue('pca/universal',       self._pca_universal)
@@ -6422,6 +6495,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.white_combo.setCurrentIndex(combo_idx)
         self.white_combo.blockSignals(False)
         self.pca_n_spin.setValue(s.value('pca_n_components', 5, type=int))
+        self.median_patch_spin.setValue(s.value('median/patch_size', 100, type=int))
+        self._median_patch_lbl.setVisible(chk_checked and combo_idx == 2)
+        self.median_patch_spin.setVisible(chk_checked and combo_idx == 2)
         self._pca_blur_enabled  = s.value('pca/blur_enabled',  False, type=bool)
         self._pca_blur_sigma    = s.value('pca/blur_sigma',    400,   type=int)
         self._pca_universal     = s.value('pca/universal',     False, type=bool)
@@ -6438,7 +6514,28 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self.statusBar().showMessage(f'Last file: {last}')
 
     def closeEvent(self, event):
+        self._measurements.cancel_drawing()
+        if self._scale_dialog is not None:
+            self._scale_dialog.close()
         self._stop_play()
+        self._median_closing = True
+        self._invalidate_median()
+        if self._median_worker is not None:
+            density_window = self._density_retrieval_window
+            if density_window is not None:
+                density_window.close()
+            self.statusBar().showMessage("Closing after median correction finishes…")
+            event.ignore()
+            return
+        density_window = self._density_retrieval_window
+        if density_window is not None:
+            if density_window.is_busy:
+                self._density_close_pending = True
+                density_window.close()
+                self.statusBar().showMessage('Closing after density retrieval finishes…')
+                event.ignore()
+                return
+            density_window.close()
         self._save_settings()
         if self._pca_worker is not None:
             self._pca_worker.quit()

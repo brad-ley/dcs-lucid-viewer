@@ -7,3 +7,5 @@ __pycache__*
 .spyder*
 .env*
 *.pyc
+# Windows Explorer thumbnail cache
+Thumbs.db
