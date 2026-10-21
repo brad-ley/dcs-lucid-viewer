@@ -463,6 +463,41 @@ In this layout, when cell A is open with Universal PCA, the viewer finds
 
 ---
 
+
+## Spatial calibration and measurements
+
+Choose **Tools → Set Scale…** to open a nonmodal calibration window. Enter
+**Distance in pixels** and **Known distance (µm)**, or click **Draw Calibration
+Line** and drag across a known feature in the main image. The amber line has
+draggable endpoints; its pixel length updates live in the window. Editing the
+pixel distance also resizes the line. Escape or right-click cancels drawing.
+
+**Apply Scale** immediately uses `known distance / pixel distance` in µm/px.
+A name is optional when applying. **Save Calibration** requires a nonblank,
+unique name (case insensitive), stores the two distances, and applies the scale.
+Saved calibrations appear in the top drop-down: selecting one loads its fields
+for review; click **Apply Scale** to use it. To save an edited calibration,
+enter a new unique name. **Delete Stored** removes the selected preset without
+changing the scale currently in use.
+
+The measurement bar above the image shows the active scale. A manual scale
+persists across recordings and viewer restarts; **Use Recording Scale** returns
+to the sensor-pitch/objective calibration in each recording's metadata. Unknown
+recording scale uses pixels. The calibration assumes square image pixels and
+is the sample-plane pitch shared by measurements, newly opened FFT windows,
+and density retrieval. Applying a scale also updates an open density-retrieval
+window; existing FFT windows retain the scale with which they were opened.
+
+Click **Measure** and drag a line on the image. Each click arms one new line;
+drag either circular endpoint or the line body to refine it. Numbered blue
+labels show length in µm, or pixels before calibration. Lines stay at their
+source-pixel coordinates through frame changes and opening other images,
+including different image sizes. Applying a new scale relabels all of them.
+**Clear Measurements** removes all measurement lines. Measurements last until
+cleared or the viewer closes; saved calibrations persist separately. Overlays
+are for inspection and are not burned into exported image data.
+
+
 ## Density Retrieval
 
 Choose **Tools → Density Retrieval…** with a frame open. The nonmodal window

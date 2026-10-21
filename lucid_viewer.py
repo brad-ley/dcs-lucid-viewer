@@ -40,6 +40,9 @@ from PyQt6.QtGui import QDesktopServices, QPainter, QColor, QPen
 import pyqtgraph as pg
 from viewer_shared import COLORMAPS, _build_pixel_mask, ViewerMixin, _DARK_STYLE_BASE
 from median_white_field import correct_median_white, median_plan, MedianCancelled
+from spatial_calibration import (
+    SpatialCalibration, LineDrawingViewBox, MeasurementOverlay, SetScaleDialog,
+)
 
 _FORMAT_BITS = {
     'Mono8': 8, 'Mono10': 10, 'Mono10p': 10, 'Mono10Packed': 10,
@@ -2442,18 +2445,11 @@ class _FFTDialog(QDialog):
 
         if pixel_size_um:
             calib_text = (
-                f'Calibrated: {sensor_pixel_um} µm sensor pixel size → '
-                f'{pixel_size_um:.4f} µm/px at the sample.')
-        elif sensor_pixel_um:
-            calib_text = (
-                "No objective magnification in this recording's metadata -- "
-                'showing cycles/pixel. Set Camera → Microscope Objective (or '
-                'Config → Microscope Objective) in the acquisition app for '
-                'real spatial-frequency units.')
+                f'Calibrated sample scale: {pixel_size_um:.6g} µm/px.')
         else:
             calib_text = (
-                "Camera not recognized from this recording's metadata -- "
-                'showing cycles/pixel.')
+                'No recording scale available — showing cycles/pixel. '
+                'Use Tools → Set Scale… in the main viewer to calibrate distances.')
         layout.addWidget(QLabel(calib_text))
 
         # ── source image with draggable/resizable FOV ROI ──────────────────────
@@ -2813,6 +2809,8 @@ class LucidViewer(ViewerMixin, QMainWindow):
     def __init__(self):
         super().__init__()
         self._settings          = QSettings(self.SETTINGS_ORG, self.SETTINGS_APP)
+        self._spatial_scale = SpatialCalibration(self._settings, self)
+        self._scale_dialog = None
         self._reader            = None
         self._path              = None
         self._sidecar_fps       = None
@@ -2893,6 +2891,17 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self.setWindowIcon(QIcon(_ico))
         self._build_ui()
         self._pixel_inspector = PixelInspector(self.imview)
+        self._measurements = MeasurementOverlay(self.imview, self._spatial_scale, self)
+        self.measure_btn.toggled.connect(self._measure_toggled)
+        self.clear_measurements_btn.clicked.connect(self._measurements.clear_measurements)
+        self._measurements.drawing_changed.connect(self._measurement_drawing_changed)
+        self._measurements.count_changed.connect(self._measurement_count_changed)
+        self._measurements.image_available_changed.connect(self.measure_btn.setEnabled)
+        self._measurements.message.connect(self.statusBar().showMessage)
+        self._spatial_scale.changed.connect(self._spatial_scale_changed)
+        self._spatial_scale_changed()
+        self._measurement_escape = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self._measurement_escape.activated.connect(self._measurements.cancel_drawing)
         self._connect()
         self.setStyleSheet(_DARK_STYLE)
         self._restore_settings()
@@ -2957,6 +2966,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         config_menu.addAction(trigger_settings_act)
 
         tools_menu = self.menuBar().addMenu('&Tools')
+        scale_act = QAction('Set &Scale…', self)
+        scale_act.setStatusTip('Calibrate image distances or load a saved spatial scale')
+        scale_act.triggered.connect(self._open_scale_dialog)
+        tools_menu.addAction(scale_act)
+        tools_menu.addSeparator()
         fft_act = QAction('&FFT (spatial frequency)…', self)
         fft_act.setStatusTip('Pick a FOV on the current frame and view its 2D FFT')
         fft_act.triggered.connect(self._open_fft_dialog)
@@ -3203,7 +3217,25 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self.frame_title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         rv.addWidget(self.frame_title_label)
 
-        self.imview = pg.ImageView()
+        measurement_bar = QHBoxLayout()
+        measurement_bar.setContentsMargins(8, 3, 8, 3)
+        measurement_bar.setSpacing(8)
+        self.measure_btn = QPushButton('Measure')
+        self.measure_btn.setCheckable(True)
+        self.measure_btn.setEnabled(False)
+        self.measure_btn.setToolTip('Draw a measurement line, then drag either endpoint to refine it. Escape cancels.')
+        self.measure_btn.setStyleSheet('QPushButton:checked { background: #294653; border-color: #74cee8; color: #d6f5ff; }')
+        self.clear_measurements_btn = QPushButton('Clear Measurements')
+        self.clear_measurements_btn.setEnabled(False)
+        self.scale_label = QLabel()
+        self.scale_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.scale_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.scale_label.setStyleSheet('color: #a9b5bc; padding-left: 6px;')
+        measurement_bar.addWidget(self.measure_btn)
+        measurement_bar.addWidget(self.clear_measurements_btn)
+        measurement_bar.addWidget(self.scale_label, 1)
+        rv.addLayout(measurement_bar)
+        self.imview = pg.ImageView(view=LineDrawingViewBox())
         rv.addWidget(self.imview)
 
         self._mask_item = pg.ImageItem()
@@ -3376,6 +3408,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self._sidecar_pixel_pitch_um = _LUCID_PIXEL_UM
         else:
             self._sidecar_pixel_pitch_um = None
+        try:
+            pitch = float(self._sidecar_pixel_pitch_um) / float(self._sidecar_objective)
+        except (TypeError, ValueError, ZeroDivisionError):
+            pitch = None
+        self._spatial_scale.set_recording_scale(pitch)
         self._timestamps, self._ts_unit, self._gains, self._exposures, self._line_statuses = _load_timestamps(path)
 
         # Fall back to filename hint for pixel format if sidecar didn't provide it
@@ -3690,6 +3727,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         self._auto_levels_done = True
         self.imview.setImage(display_frame, autoLevels=auto, autoRange=False)
         self._pixel_inspector.update(display_frame)
+        self._measurements.set_image_shape(display_frame.shape)
         self._apply_colormap(self.cmap_combo.currentText())
         self._update_mask(frame)
 
@@ -5482,6 +5520,39 @@ class LucidViewer(ViewerMixin, QMainWindow):
             if self._reader is not None:
                 self._open_reader()
 
+    def _open_scale_dialog(self):
+        if self._scale_dialog is None:
+            self._scale_dialog = SetScaleDialog(self._spatial_scale, self._measurements, self)
+        self._scale_dialog.show()
+        self._scale_dialog.raise_()
+        self._scale_dialog.activateWindow()
+
+    def _spatial_scale_changed(self):
+        self.scale_label.setText(self._spatial_scale.description)
+        self.scale_label.setToolTip('Tools → Set Scale… changes this calibration. Manual scale persists across recordings.')
+        window = self._density_retrieval_window
+        if window is not None and not window.is_closing:
+            from density_retrieval import RetrievalParameters
+            pitch = self._spatial_scale.pitch_um or RetrievalParameters().pixel_size_um
+            window.pixel_input.setValue(pitch)
+
+    def _measure_toggled(self, checked):
+        if checked:
+            self._measurements.start_drawing('measure')
+        elif self._measurements.mode == 'measure':
+            self._measurements.cancel_drawing()
+
+    def _measurement_drawing_changed(self, mode):
+        self.measure_btn.blockSignals(True)
+        self.measure_btn.setChecked(mode == 'measure')
+        self.measure_btn.setText('Draw on Image…' if mode == 'measure' else 'Measure')
+        self.measure_btn.blockSignals(False)
+        # The built-in mean ROI should not consume drags while a line is armed.
+        self.imview.roi.setEnabled(mode is None)
+
+    def _measurement_count_changed(self, count):
+        self.clear_measurements_btn.setEnabled(count > 0)
+
     def _open_fft_dialog(self):
         if self._median_display_pending:
             self.statusBar().showMessage("Wait for the median correction to finish.")
@@ -5490,9 +5561,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if frame is None:
             QMessageBox.information(self, 'FFT', 'Open a file and load a frame first.')
             return
-        pixel_size_um = None
-        if self._sidecar_objective and self._sidecar_pixel_pitch_um:
-            pixel_size_um = self._sidecar_pixel_pitch_um / self._sidecar_objective
+        pixel_size_um = self._spatial_scale.pitch_um
         dlg = _FFTDialog(frame, pixel_size_um=pixel_size_um,
                           sensor_pixel_um=self._sidecar_pixel_pitch_um,
                           parent=self, stylesheet=_DARK_STYLE)
@@ -5532,9 +5601,7 @@ class LucidViewer(ViewerMixin, QMainWindow):
         if self._median_display_pending:
             window.clear_frame()
             return
-        pixel_size_um = None
-        if self._sidecar_objective and self._sidecar_pixel_pitch_um:
-            pixel_size_um = self._sidecar_pixel_pitch_um / self._sidecar_objective
+        pixel_size_um = self._spatial_scale.pitch_um
         label = f'{os.path.basename(self._path or "Image")} — Frame {idx + 1}'
         if self._white_mode == "median":
             label += " — Median synthetic white field (relative contrast only)"
@@ -6189,6 +6256,9 @@ class LucidViewer(ViewerMixin, QMainWindow):
             self.statusBar().showMessage(f'Last file: {last}')
 
     def closeEvent(self, event):
+        self._measurements.cancel_drawing()
+        if self._scale_dialog is not None:
+            self._scale_dialog.close()
         self._stop_play()
         self._median_closing = True
         self._invalidate_median()

@@ -11,7 +11,7 @@ from PyQt6.QtGui import QAction, QActionGroup, QTransform
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QFormLayout, QGroupBox, QLabel,
     QDoubleSpinBox, QSpinBox, QLineEdit, QCheckBox, QPushButton, QComboBox,
-    QScrollArea, QSplitter, QProgressBar, QToolButton,
+    QScrollArea, QSplitter, QProgressBar, QToolButton, QSizePolicy,
 )
 
 from retrieval_roi import ProcessingROI, ROISelectionViewBox
@@ -19,6 +19,14 @@ from retrieval_roi import ProcessingROI, ROISelectionViewBox
 from density_retrieval import (
     RetrievalParameters, RetrievalCancelled, retrieve_density,
 )
+
+
+class _PixelSizeInput(QDoubleSpinBox):
+    def textFromValue(self, value):
+        text = super().textFromValue(value)
+        # Keep calculation precision without a row of insignificant trailing zeros.
+        point = self.locale().decimalPoint()
+        return text.rstrip('0').rstrip(point) if point in text else text
 
 
 class _RetrievalWorker(QThread):
@@ -146,11 +154,18 @@ class DensityRetrievalWindow(QMainWindow):
                                      0.1, 1000, 1, 43)
         self.rr2_input = self._double(form, "Sample → detector, RR2 (m):",
                                      0.01, 20, 2, 3)
-        self.pixel_input = self._double(form, "Pixel Size (µm):",
-                                       0.001, 1000, 4, 0.274)
+        self.pixel_input = _PixelSizeInput()
+        self.pixel_input.setDecimals(15)
+        self.pixel_input.setRange(1e-15, 1e15)
+        self.pixel_input.setValue(0.274)
+        self.pixel_input.setSingleStep(.001)
+        self.pixel_input.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.pixel_input.setMinimumWidth(90)
+        form.addRow("Pixel Size (µm):", self.pixel_input)
         self.pixel_input.setToolTip(
             "Sample-plane pixel pitch, using the reference retrieval GUI's convention. "
-            "Initially taken from sensor pitch / objective magnification when available.")
+            "Initially taken from the main viewer's active scale. Tools → Set Scale… "
+            "overrides sensor pitch / objective magnification.")
         left.addWidget(physical)
 
         self.roi_group = ProcessingROI()
