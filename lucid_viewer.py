@@ -87,7 +87,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QSettings, QUrl, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon
-from PyQt6.QtGui import QDesktopServices, QPainter, QColor, QPen
+from PyQt6.QtGui import QDesktopServices, QPainter, QColor, QPen, QFont
 
 import pyqtgraph as pg
 from viewer_shared import COLORMAPS, _build_pixel_mask, ViewerMixin, _DARK_STYLE_BASE
@@ -2528,6 +2528,14 @@ def _format_length_um(length_um):
     return f'{length_um:.2f} µm'
 
 
+def _line_label_font():
+    # Built lazily (not at import time) since QFont needs a QApplication.
+    font = QFont()
+    font.setPointSize(12)
+    font.setBold(True)
+    return font
+
+
 def _position_line_label(label, p0, p1, offset_px=14):
     """Angle a line-length TextItem to match the line and nudge it to one
     side along the line's normal -- stops the label sitting right on top of
@@ -2723,6 +2731,7 @@ class _CalibrationDialog(QDialog):
         roi = pg.LineSegmentROI([p0, p1], pen=pg.mkPen('#ffcc00', width=2))
         self._view.getView().addItem(roi)
         label = pg.TextItem('', color='#ffffff', anchor=(0.5, 0.5))
+        label.setFont(_line_label_font())
         self._view.getView().addItem(label)
         entry = {'roi': roi, 'label': label, 'length_px': 0.0}
         self._lines.append(entry)
@@ -2870,6 +2879,7 @@ class _FFTDialog(QDialog):
         # same as the Measure/Calibrate tool's lines) rather than a separate
         # text field, so the reading sits right next to what it measures.
         self._measure_label = pg.TextItem('', color='#ffffff', anchor=(0.5, 0.5))
+        self._measure_label.setFont(_line_label_font())
         self._measure_label.setVisible(False)
         self._src_view.getView().addItem(self._measure_label)
         self._measure_line.sigRegionChanged.connect(self._update_measure_label)
