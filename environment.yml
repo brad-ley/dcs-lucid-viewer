@@ -4,18 +4,16 @@ channels:
   - defaults
 dependencies:
   - python=3.12
-  - numpy
+  - numpy>=2
+  # Avoid MKL/OpenMP DLL collisions with pip PyTorch on Windows.
+  - libblas=*=*openblas
+  - liblapack=*=*openblas
   - scipy
   - pip
   - pip:
-    # PyQt6 / PyQt6-Qt6 / PyQt6-sip pinned together to a combination verified
-    # working, rather than left to float. These aren't locked to each other
-    # by pip's resolver -- a PC that happens to create this env on a
-    # different day can land on a different PyQt6-Qt6 patch release than the
-    # PyQt6 bindings were tested against, and some patch releases break ABI
-    # compatibility with "DLL load failed ... The specified procedure could
-    # not be found" on import (seen in the wild: PyQt6 6.11.0 + PyQt6-Qt6
-    # 6.11.2 failed outright, while 6.11.0 + 6.11.1 here did not).
+    # Keep bindings, Qt runtime and sip at the versions tested together.
+    # viewer_runtime.py loads Windows ICU first so conda's same-named
+    # ICU DLL cannot shadow the Windows exports required by Qt.
     - PyQt6==6.11.0
     - PyQt6-Qt6==6.11.1
     - PyQt6-sip==13.11.1
@@ -23,3 +21,7 @@ dependencies:
     - tifffile
     - opencv-python
     - pillow
+    # Density Retrieval: material constants and nonlinear Fresnel solver.
+    - xraylib
+    - torch
+    - hotopy==0.25

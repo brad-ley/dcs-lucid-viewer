@@ -154,9 +154,10 @@ current frame (applied automatically when a new file is opened).
 
 ## Field correction
 
-Corrections are applied in the **Correction** panel in the sidebar. The result
-is displayed as 32-bit float **x-ray transmission** (values ≈ 0–1 for a typical
-acquisition). Raw counts are shown when correction is off.
+Corrections are applied in the **Correction** panel in the sidebar. Dark-only
+correction gives dark-subtracted counts; flat/PCA correction gives float32
+transmission; Median Filter gives float32 relative local intensity around 1.
+Raw counts are shown when correction is off.
 
 ### Dark field
 
@@ -190,6 +191,43 @@ corrected    = data − dark                        [dark only]
 
 **Auto-detection:** same timestamp-proximity logic as dark field, searching for
 folders whose names contain `white_field`.
+
+### Synthetic white field: Median Filter
+
+Choose **Median Filter** in the white-field combo and check **White field**.
+No reference folder is needed. A **Patch size** selector appears, defaulting to
+**100 pixels**; it is hidden for the other modes. Patch size and mode persist
+in application settings, and **Store** can save them in the recording sidecar.
+
+Each frame is first dark-subtracted with the usual gain matching, if a valid
+dark reference is active. A fast approximate median background is estimated
+from an area-reduced float image (about 15 working samples across a large
+patch), then interpolated back to full size. The original dark-corrected pixels
+are divided by that background. Only the estimated white field is reduced;
+image detail is not downsampled or quantized to 8-bit values.
+
+This removes overall attenuation and broad structures, retaining localized
+variations. It is **relative contrast, not absolute transmission**. The Density
+Retrieval tool receives this relative image and labels it accordingly; it
+cannot recover the removed attenuation. Nonpositive or negligible background
+pixels are masked to zero, with their count reported; signed input variations
+are retained where the background is valid.
+
+Filtering runs in a Qt worker with one latest pending frame, obsolete-result
+protection, a two-frame result cache, and debounced patch-size changes.
+Playback allows each calculation to finish before following the playback
+clock, so it can skip frames without continually cancelling every result.
+Larger jobs use CUDA when available, with bounded patch scratch memory and a
+CPU/SciPy fallback. Initial CUDA loading also happens in the worker.
+
+Current-frame, TIFF-stack, average-frame and GIF exports use the same correction.
+Average exports normalize **each frame before averaging**. TIFF metadata
+(including the ImageJ mapping sidecar) records the approximation, requested patch,
+working grid and `absolute_transmission: false`. Suggested TIFF names include
+`_median_white` or `_dark_median_white`.
+
+Run `python -m unittest test_median_white_field -v` to check the median math,
+CPU/CUDA edge agreement, GUI worker behavior, cancellation and export semantics.
 
 ### PCA background removal
 
@@ -287,7 +325,7 @@ folder paths into the file's sidecar JSON under `field_references`. On the next
 open of the same `.raw` file, the same correction is applied automatically.
 
 Stored keys: `dark_folder`, `white_folder`, `white_pca_folder`,
-`white_pca_master_folder`, `pca_universal`, `white_mode`.
+`white_pca_master_folder`, `pca_universal`, `white_mode`, `median_patch_size_px`.
 
 ---
 
@@ -425,6 +463,95 @@ In this layout, when cell A is open with Universal PCA, the viewer finds
 
 ---
 
+## Density Retrieval
+
+Choose **Tools → Density Retrieval…** with a frame open. The nonmodal window
+uses its own copy of the viewer's current corrected image, before colormap,
+histogram contrast, pixel masks or integer export encoding. Frame navigation
+and dark/white/PCA correction changes update that copy. No background or
+flat-field correction is repeated inside the tool. Input should be normalized
+transmission (vacuum = 1); opening the tool does not normalize raw counts.
+
+The analysis matches the reference `pci_retrieval_gui.py`: select **Paganin
+Fourier filter** or **Nonlinear Fresnel with TV (TikhonovTV)** from its Phase
+Retrieval menu. Energy, formula, RR1 (source to sample), RR2 (sample to detector),
+pixel pitch and reference material density are editable. Pixel pitch uses the
+reference's sample-plane convention and starts at sensor pitch / microscope
+objective magnification when that calibration is available, or 0.274 µm
+otherwise. A manual pitch edit is retained while stepping through a recording.
+
+The iterative solver exposes TV and Tikhonov regularization, maximum iterations,
+relative tolerance, and CUDA/CPU selection; CUDA falls back to CPU when unavailable.
+The **Output → Plot** selector defaults to **Areal density (mg/cm²)** and also
+provides **Thickness (µm)**, **Exit phase (rad)**, and **Object-plane transmission
+(I/I₀)**. Switching outputs reuses the completed retrieval and updates the plot
+title and cursor units; it does not rerun either solver or change the ROI.
+Both images have linked spatial axes, independent histograms, equal/stretch
+aspect options, and cursor readouts.
+
+Exit phase is the unwrapped projected phase shift relative to vacuum,
+`φ = -2π δ t / λ`; positive equivalent thickness gives negative phase.
+Object-plane transmission is the intensity ratio immediately after the object,
+before propagation to the detector: `T = I_exit/I_incident = exp(-μ t)`, where
+`μ = 4π β/λ`. Vacuum has phase zero and transmission one. This is intensity,
+not field amplitude. Both outputs use the same selected material/energy model
+and retrieval regularization; they are not independent phase and absorption
+reconstructions. Synthetic median white fields still provide relative contrast
+only and cannot recover the removed overall attenuation or phase offset.
+
+Enable **Processing ROI** to process a subset of the corrected image. Click
+**Draw Box** and drag on the full input image, then move/resize the rectangle or
+edit its zero-based **X**, **Y**, **Width**, and **Height** in pixels. Escape or
+clicking Draw Box again cancels an unfinished selection. **Full Image** clears
+the selection and restores processing of the entire frame.
+
+The selected array is cropped before either solver runs, including before FFTs
+and CUDA transfers; the input display stays uncropped. The group shows the
+selected dimensions and percentage of full-frame pixels. Retrieved pixels and
+cursor readouts retain their original image coordinates. A selection is retained
+between frames of the same recording and resets for a different source or image
+size. Auto retrieval waits until a box drag finishes. Include a margin around
+features: cropping changes the solvers' Fourier boundaries and can affect values
+near crop edges.
+
+Auto retrieval follows image and parameter changes. Uncheck **Auto Retrieve
+Phase** to calculate only when **Retrieve Phase** is pressed. One Qt worker
+runs at a time and retains only the latest pending request; obsolete results
+are discarded. During continuous playback, retrieval catches up to the latest
+frame once a calculation can finish without another change.
+
+Closing a busy retrieval window hides it immediately and lets its numerical
+call finish before releasing the worker. Closing the main viewer also waits
+asynchronously for that worker, so its GUI stays responsive. HoToPy's internal
+iteration loop is not forcibly terminated.
+
+New environments include xraylib, PyTorch and HoToPy. Update an existing
+viewer environment from this repository before using the new tool:
+
+```powershell
+conda env update -n lucid-viewer -f environment.yml
+```
+
+Optional solver imports happen inside the worker; a missing dependency produces
+an installation message in the tool's status bar. Paganin needs xraylib;
+nonlinear retrieval additionally needs torch and hotopy (validated with 0.25).
+These homogeneous-material, single-distance methods retain the reference's
+geometry, material model, Fourier boundaries and logarithm floor.
+
+The **?** button in **Iterative Solver** opens a nonmodal guide to **Alpha TV**
+and **Tikhonov Alpha**, with noisy toy reconstructions at low, intermediate
+and high alpha values, plus practical tuning advice. It
+explains edge/noise tradeoffs, density bias, and the scalar Tikhonov weighting
+used by this viewer. The guide can stay open while adjusting parameters.
+
+Run the focused regression tests with `python -m unittest test_density_retrieval -v`.
+Qt tests use isolated settings and an offscreen window. Nonlinear tests skip
+when HoToPy is not installed. CUDA tests additionally require a CUDA-enabled
+PyTorch build and an available GPU; they check vacuum, CPU/GPU agreement and
+responsive Qt event handling during real GPU retrieval.
+
+---
+
 ## Settings persistence
 
 All user preferences are saved via `QSettings` (Windows Registry /
@@ -444,7 +571,7 @@ platform-native store) and restored on next launch:
 ## Dependencies
 
 ```
-pip install PyQt6 pyqtgraph numpy scipy tifffile opencv-python pillow
+pip install PyQt6 pyqtgraph numpy scipy tifffile opencv-python pillow xraylib torch hotopy==0.25
 ```
 
 | Package | Required for |
@@ -452,7 +579,74 @@ pip install PyQt6 pyqtgraph numpy scipy tifffile opencv-python pillow
 | `PyQt6` | UI framework |
 | `pyqtgraph` | Image display and histogram |
 | `numpy` | All array math |
-| `scipy` | FFT-accelerated Gaussian blur (PCA path) |
+| `scipy` | FFT-accelerated Gaussian blur and retrieval constants |
 | `tifffile` | TIFF reading and TIFF stack export |
 | `opencv-python` | MP4/AVI video reading |
 | `pillow` | GIF export |
+| `xraylib` | Density Retrieval material optical constants |
+| `torch`, `hotopy` | Nonlinear Fresnel density retrieval |
+
+### Windows Qt startup
+
+The viewer calls `viewer_runtime.prepare_qt_runtime()` before loading NumPy or Qt.
+This loads `icuuc.dll` from Windows System32. Conda also supplies an `icuuc.dll`,
+but its exports differ from the Windows ICU exports that the pip Qt runtime
+needs; loading conda's copy can produce
+`DLL load failed ... The specified procedure could not be found` when importing
+QtCore or QtWidgets. The startup helper resolves this within the viewer process.
+
+Run `python -m unittest test_viewer_runtime -v` to verify a fresh import and
+window launch in the selected environment. The tests use temporary settings.
+
+### Windows nonlinear-solver runtime
+
+The conda environment pins NumPy's BLAS/LAPACK backend to OpenBLAS. The MKL
+backend can initialize a different OpenMP runtime before PyTorch is loaded;
+then selecting Nonlinear Fresnel + TV may report WinError 127 while loading
+`torch/lib/shm.dll`. OpenBLAS avoids that runtime collision while retaining
+multithreaded linear algebra.
+
+To repair an older `lucid-viewer` environment:
+
+```powershell
+conda install -n lucid-viewer -c conda-forge "libblas=*=*openblas" "liblapack=*=*openblas"
+```
+
+Restart the viewer after an environment repair so it loads the new native
+libraries. The regression
+`python -m unittest test_viewer_runtime.ViewerRuntimeTests.test_pca_libraries_then_nonlinear_tv_in_fresh_process -v`
+checks the actual order: Qt startup, NumPy SVD/least squares, then nonlinear TV
+retrieval in a fresh process.
+
+### GPU environment
+
+`lucid-viewer-gpu` is an independent copy of the working `lucid-viewer`
+environment, with PyTorch replaced by the matching CUDA 13.0 build. It retains
+the existing Qt, HoToPy, NumPy/OpenBLAS and other dependency versions.
+
+To reproduce it from the working CPU environment:
+
+```powershell
+conda create -n lucid-viewer-gpu --clone lucid-viewer --copy -y
+conda run -n lucid-viewer-gpu python -m pip install --upgrade --no-deps "torch==2.14.1+cu130" --index-url https://download.pytorch.org/whl/cu130
+```
+
+Launch the viewer using the GPU environment:
+
+```powershell
+conda activate lucid-viewer-gpu
+python lucid_viewer.py
+```
+
+In Density Retrieval, select **Nonlinear Fresnel with TV** and solver device
+**cuda**. The CUDA wheel includes its runtime libraries; an NVIDIA driver
+compatible with CUDA 13.0 is required. Check the selected environment with:
+
+```powershell
+python -c "import torch; print(torch.__version__, torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
+python -m pip check
+python -m unittest test_viewer_runtime test_density_retrieval -v
+```
+
+Both CUDA tests must run rather than skip to verify GPU retrieval and responsive
+Qt event handling. Keep the OpenBLAS pins when updating this environment.
