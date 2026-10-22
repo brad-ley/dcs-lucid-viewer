@@ -883,77 +883,118 @@ def _blur_and_bin(f_2d, sigma, n_low):
     return f_crop.reshape(H_low, B, W_low, B).mean(axis=(1, 3)).ravel().astype(np.float32)
 
 
-def _compute_pca_from_frames(frames, n_components=20, blur_sigma=0.0, progress_cb=None):
+# Beam-variation modes are far smoother than a pixel (~400 nm at the sample),
+# so the eigen-decomposition runs on 2x2-binned frames: 4x more white-field
+# frames fit in the same memory. The mean stays full resolution, since it
+# carries real pixel-scale detail (dust, pixel response).
+_PCA_BIN = 2
+
+
+def _bin2d(img, b):
+    """Block-average a 2-D array by b (trailing rows/columns that don't fill a block are dropped)."""
+    if b <= 1:
+        return img
+    H, W = img.shape
+    Hb, Wb = H // b, W // b
+    return img[:Hb * b, :Wb * b].reshape(Hb, b, Wb, b).mean(axis=(1, 3))
+
+
+def _upsample_to(img_low, H, W):
+    """Bilinear resize of a 2-D float32 array back to (H, W)."""
+    import cv2
+    return cv2.resize(np.ascontiguousarray(img_low, dtype=np.float32), (W, H),
+                      interpolation=cv2.INTER_LINEAR)
+
+
+def _orthonormalize_rows(V):
+    """In-place modified Gram-Schmidt on the rows of V (prefix spans preserved)."""
+    for k in range(V.shape[0]):
+        for j in range(k):
+            V[k] -= np.float32(np.dot(V[j], V[k])) * V[j]
+        norm = float(np.linalg.norm(V[k]))
+        if norm > 1e-10:
+            V[k] /= np.float32(norm)
+    return V
+
+
+def _blur_analysis_basis(components, shape, blur_sigma, progress_cb=None):
+    """Blur-mode fitting basis derived from the full-res components themselves.
+
+    Returns (components_rot, analysis_low) such that, for EVERY prefix n,
+        bg = mean + components_rot[:n].T @ (analysis_low[:n] @ (blur_and_bin(data) - mean_low))
+    is the least-squares fit of the blurred data frame by blurred copies of
+    the first n components. Earlier code ran a separate PCA on blurred white
+    frames and applied its unit-norm weights to the full-res components; the
+    two bases weren't matched, so the weights came out too small by roughly
+    the downsample factor (8x at sigma=400) and blur mode barely corrected
+    anything. Here the low-res rows are blur_and_bin of each full-res
+    component, Gram-Schmidt orthogonalized with the same lower-triangular
+    combination applied to the full-res rows, so prefix slicing in the
+    existing apply code stays exact. Components the blur erases (fine-scale)
+    get zero rows and drop out of blur-mode fitting.
     """
-    PCA on a list of (H, W) float32 frames using the frame-space covariance
-    trick (K << N).  All heavy work is a small number of BLAS sgemm calls.
-    Returns (mean, components, explained, mean_low, components_low).
-      mean/components/explained: full-resolution PCA (H*W,) float32
-      mean_low/components_low:   Gaussian-blurred PCA for dual-resolution
-                                 projection (None when blur_sigma <= 0)
+    H, W = shape
+    B = _blur_downsample_factor(blur_sigma)
+    n_low = (H // B) * (W // B)
+    n = components.shape[0]
+    Q = np.empty((n, n_low), dtype=np.float32)
+    for k in range(n):
+        if progress_cb:
+            progress_cb(f'PCA (blur): blurring component {k + 1}/{n}…')
+        Q[k] = _blur_and_bin(components[k].reshape(H, W), blur_sigma, n_low)
+    T = np.eye(n)
+    qq = np.zeros(n)
+    # A smooth unit-norm component keeps ~1/B of its norm after block-averaging;
+    # one that loses >90% of that to the blur/orthogonalization is noise at this scale.
+    min_norm = 0.1 / B
+    for k in range(n):
+        for j in range(k):
+            if qq[j] > 0:
+                r = float(np.dot(Q[j], Q[k])) / qq[j]
+                Q[k] -= np.float32(r) * Q[j]
+                T[k] -= r * T[j]
+        q2 = float(np.dot(Q[k], Q[k]))
+        if q2 ** 0.5 >= min_norm:
+            qq[k] = q2
+        else:
+            Q[k] = 0.0
+            T[k] = 0.0
+    analysis = np.zeros((n, n_low), dtype=np.float32)
+    keep = qq > 0
+    analysis[keep] = (Q[keep] / qq[keep, None]).astype(np.float32)
+    components_rot = (T.astype(np.float32) @ components).astype(np.float32)
+    return components_rot, analysis
+
+
+def _compute_pca_binned(X_bin, mean_full, shape, bin_factor=_PCA_BIN,
+                        n_components=20, blur_sigma=0.0, progress_cb=None):
+    """
+    PCA via the frame-space covariance trick (K << N) on (K, Nb) binned frames,
+    with the component images bilinear-upsampled back to full resolution and
+    re-orthonormalized there. X_bin is centered in place.
+    Returns (mean, components, explained, mean_low, components_low):
+      mean:       full-res white-field mean (H*W,) float32 -- passed in, unbinned
+      components: full-res (n, H*W) float32 beam-variation modes
+      explained:  fraction of (binned) white-field variance per component
+      mean_low / components_low: blur-mode fitting basis (None when blur_sigma <= 0),
+                                 see _blur_analysis_basis()
     """
     def _prog(msg):
         if progress_cb:
             progress_cb(msg)
 
-    K = len(frames)
+    K = X_bin.shape[0]
     if K < 2:
         raise ValueError('PCA requires at least 2 white-field frames.')
-    H, W = frames[0].shape
-    N = H * W
+    H, W = shape
+    Hb, Wb = H // bin_factor, W // bin_factor
     n_components = min(n_components, K - 1)
 
-    mu_low = None
-    V_low  = None
-
-    # ── Blur path first: build X_low, project, free before building X ─────────
-    # Downsample by B after blurring — modes of variation are purely macro-scale,
-    # so N/B² pixels carry the same information at a fraction of the memory cost.
-    # X_low and X never coexist, keeping peak memory at one (K, N_low) + one (K, N).
-    if blur_sigma > 0.0:
-        B      = _blur_downsample_factor(blur_sigma)
-        H_low  = H // B
-        W_low  = W // B
-        N_low  = H_low * W_low
-        X_low  = np.empty((K, N_low), dtype=np.float32)
-        for i, f in enumerate(frames):
-            _prog(f'PCA (blur): blurring frame {i + 1}/{K}…')
-            f_blur = _gaussian_blur_fft(f, blur_sigma)
-            if B > 1:
-                f_crop = f_blur[:H_low * B, :W_low * B]
-                X_low[i] = f_crop.reshape(H_low, B, W_low, B).mean(axis=(1, 3)).ravel()
-            else:
-                X_low[i] = f_blur.ravel()
-        mu_low  = X_low.mean(axis=0)
-        X_low  -= mu_low
-        _prog('PCA (blur): frame covariance…')
-        C_low = X_low.dot(X_low.T).astype(np.float64) / max(K - 1, 1)
-        _prog('PCA (blur): eigendecomposition…')
-        ev_low, evec_low = np.linalg.eigh(C_low)
-        del C_low
-        evec_low = evec_low[:, np.argsort(ev_low)[::-1]]
-        _prog(f'PCA (blur): projecting {n_components} components…')
-        E_low = np.ascontiguousarray(
-            evec_low[:, :n_components].T.astype(np.float32))
-        del evec_low
-        V_low = E_low.dot(X_low)          # project onto blurred data
-        del X_low, E_low
-        norms_low = np.linalg.norm(V_low, axis=1, keepdims=True)
-        np.maximum(norms_low, 1e-10, out=norms_low)
-        V_low /= norms_low
-
-    # ── Main (non-blur) PCA — X_low already freed ────────────────────────────
-    _prog(f'PCA: stacking {K} frames…')
-    X = np.empty((K, N), dtype=np.float32)
-    for i, f in enumerate(frames):
-        X[i] = f.ravel()
-
     _prog('PCA: centering…')
-    mu32 = X.mean(axis=0)
-    X   -= mu32
+    X_bin -= X_bin.mean(axis=0)
 
     _prog('PCA: computing frame covariance…')
-    C = X.dot(X.T).astype(np.float64) / max(K - 1, 1)
+    C = X_bin.dot(X_bin.T).astype(np.float64) / max(K - 1, 1)
 
     _prog('PCA: eigendecomposition…')
     eigenvalues, eigenvectors = np.linalg.eigh(C)
@@ -963,23 +1004,28 @@ def _compute_pca_from_frames(frames, n_components=20, blur_sigma=0.0, progress_c
     eigenvectors = eigenvectors[:, order]
 
     _prog(f'PCA: projecting {n_components} components…')
-    evecs = np.ascontiguousarray(
-        eigenvectors[:, :n_components].T.astype(np.float32))
-    del eigenvectors
-    V = evecs.dot(X)
-    del X, evecs
-    _prog('PCA: normalizing components…')
+    evecs = np.ascontiguousarray(eigenvectors[:, :n_components].T.astype(np.float32))
+    V_bin = evecs.dot(X_bin)
+    del evecs
 
-    norms = np.linalg.norm(V, axis=1, keepdims=True)
-    np.maximum(norms, 1e-10, out=norms)
-    V /= norms
-    components = V
+    components = np.empty((n_components, H * W), dtype=np.float32)
+    for k in range(n_components):
+        _prog(f'PCA: upsampling component {k + 1}/{n_components}…')
+        components[k] = _upsample_to(V_bin[k].reshape(Hb, Wb), H, W).ravel()
+    del V_bin
+    _prog('PCA: orthonormalizing components…')
+    _orthonormalize_rows(components)
 
     total_var = float(max(eigenvalues[eigenvalues > 0].sum(), 1e-12))
     explained = (eigenvalues[:n_components] / total_var).astype(np.float32)
-    _prog('PCA done.')
 
-    return mu32, components, explained, mu_low, V_low
+    mean_full = np.ascontiguousarray(mean_full, dtype=np.float32)
+    mu_low = comp_low = None
+    if blur_sigma > 0.0:
+        components, comp_low = _blur_analysis_basis(components, (H, W), blur_sigma, _prog)
+        mu_low = _blur_and_bin(mean_full.reshape(H, W), blur_sigma, comp_low.shape[1])
+    _prog('PCA done.')
+    return mean_full, components, explained, mu_low, comp_low
 
 
 # ── TIFF export worker ────────────────────────────────────────────────────────
@@ -1588,17 +1634,17 @@ class PcaComputeWorker(QThread):
 
     def run(self):
         try:
-            frames = self._load_frames()
-            if len(frames) < 2:
-                self.pca_error.emit(f'Need ≥2 white-field frames, found {len(frames)}')
+            X_bin, mean_full, shape = self._load_binned_stack()
+            K = 0 if X_bin is None else X_bin.shape[0]
+            if K < 2:
+                self.pca_error.emit(f'Need ≥2 white-field frames, found {K}')
                 return
-            K = len(frames)
-            H, W = frames[0].shape
-            mem_gb = K * H * W * 4 / 1e9
-            self.pca_progress.emit(f'Computing PCA ({K} frames, ~{mem_gb:.1f} GB)…')
+            mem_gb = X_bin.nbytes / 1e9
+            self.pca_progress.emit(
+                f'Computing PCA ({K} frames, {_PCA_BIN}x{_PCA_BIN} binned, ~{mem_gb:.1f} GB)…')
             n_store = min(20, K - 1)
-            mu, comp, expl, mu_low, comp_low = _compute_pca_from_frames(
-                frames, n_store, blur_sigma=self._blur_sigma,
+            mu, comp, expl, mu_low, comp_low = _compute_pca_binned(
+                X_bin, mean_full, shape, _PCA_BIN, n_store, blur_sigma=self._blur_sigma,
                 progress_cb=lambda msg: self.pca_progress.emit(msg))
 
             # Emit BEFORE saving the .npz cache, not after: the fit itself is
@@ -1624,72 +1670,120 @@ class PcaComputeWorker(QThread):
         except Exception as exc:
             self.pca_error.emit(str(exc))
 
-    def _load_frames(self, max_frames=150):
-        """Load up to max_frames evenly-sampled frames from folder as float32 arrays."""
+    # Memory cap for any stack of white-field frames held at once.
+    MAX_STACK_BYTES = int(1.5 * 1024 ** 3)
+
+    def _open_white_file(self, fname):
+        """(n_frames, read(j) -> 2-D array, close()) for one white-field file."""
+        fpath = os.path.join(self._folder, fname)
+        if os.path.splitext(fname)[1].lower() == '.raw':
+            sidecar, _ = _load_sidecar(fpath)
+            fmt = sidecar.get('pixel_format') or sidecar.get('pixelformat') or self._fmt
+            r = RawReader(fpath, fmt, int(sidecar.get('width', self._w)),
+                          int(sidecar.get('height', self._h)),
+                          inverse_lut=_sqrt_inverse_lut_from_sidecar(sidecar))
+            return len(r), (lambda j: r[j]), r.close
+        import tifffile
+        tf = tifffile.TiffFile(fpath)
+        n = len(tf.pages)
+        if n == 1:
+            # A single page can still hold a (n, H, W) stack.
+            data = tf.asarray()
+            tf.close()
+            if data.ndim == 2:
+                return 1, (lambda j: data), (lambda: None)
+            return data.shape[0], (lambda j: data[j]), (lambda: None)
+        return n, (lambda j: tf.pages[j].asarray()), tf.close
+
+    def _plan_white_frames(self, max_frames):
+        """(files, frame counts, picked global frame indices): up to max_frames
+        spread evenly across ALL files in the folder, not filled from the first."""
         try:
             all_files = sorted(os.listdir(self._folder))
         except OSError:
-            return []
+            return [], [], np.zeros(0, dtype=np.int64)
         raw_files = [f for f in all_files if os.path.splitext(f)[1].lower() == '.raw']
-        tif_files = [f for f in all_files
-                     if os.path.splitext(f)[1].lower() in ('.tiff', '.tif')]
+        tif_files = [f for f in all_files if os.path.splitext(f)[1].lower() in ('.tiff', '.tif')]
         files = raw_files if raw_files else tif_files
-        if not files:
-            return []
-        # Memory cap: keep stacked (K, H*W) float32 array under 1.5 GB.
-        # blur path creates a second identical array, so 1.5 GB each → ~3 GB peak.
-        MAX_STACK_BYTES = int(1.5 * 1024 ** 3)
-        bytes_per_frame = max(1, self._w * self._h * 4)
-        mem_cap = max(4, MAX_STACK_BYTES // bytes_per_frame)
-        max_frames = min(max_frames, mem_cap)
-        frames = []
-        n = len(files)
-        for i, fname in enumerate(files):
-            if len(frames) >= max_frames:
-                break
-            fpath = os.path.join(self._folder, fname)
-            ext   = os.path.splitext(fname)[1].lower()
+        counts = []
+        for fname in files:
             try:
-                if ext == '.raw':
-                    sidecar, _ = _load_sidecar(fpath)
-                    fmt = (sidecar.get('pixel_format') or sidecar.get('pixelformat')
-                           or self._fmt)
-                    w = int(sidecar.get('width',  self._w))
-                    h = int(sidecar.get('height', self._h))
-                    r = RawReader(fpath, fmt, w, h,
-                                  inverse_lut=_sqrt_inverse_lut_from_sidecar(sidecar))
-                    n_file = len(r)
-                    budget = max_frames - len(frames)
-                    if n_file <= budget:
-                        indices = range(n_file)
-                    else:
-                        indices = [int(k * n_file / budget) for k in range(budget)]
-                    self.pca_progress.emit(
-                        f'Loading white-field frames ({i + 1}/{n})'
-                        + (f' [{len(indices)}/{n_file}]' if len(indices) < n_file else '') + '…')
-                    for j in indices:
-                        frames.append(r[j].astype(np.float32))
-                    r.close()
-                elif ext in ('.tiff', '.tif'):
-                    import tifffile
-                    data = tifffile.imread(fpath)
-                    if data.ndim == 2:
-                        frames.append(data.astype(np.float32))
-                    else:
-                        budget = max_frames - len(frames)
-                        n_file = data.shape[0]
-                        if n_file <= budget:
-                            indices = range(n_file)
-                        else:
-                            indices = [int(k * n_file / budget) for k in range(budget)]
-                        self.pca_progress.emit(
-                            f'Loading white-field frames ({i + 1}/{n})'
-                            + (f' [{len(indices)}/{n_file}]' if len(indices) < n_file else '') + '…')
-                        for j in indices:
-                            frames.append(data[j].astype(np.float32))
+                n_file, _read, close = self._open_white_file(fname)
+                close()
+            except Exception as e:
+                _dbg(f'[pca] error opening {fname}: {e}')
+                n_file = 0
+            counts.append(n_file)
+        total = sum(counts)
+        if total == 0 or max_frames <= 0:
+            return files, counts, np.zeros(0, dtype=np.int64)
+        picks = np.unique(np.linspace(0, total - 1, min(max_frames, total)).round().astype(np.int64))
+        return files, counts, picks
+
+    def _iter_white_frames(self, max_frames, plan=None):
+        """Yield the planned frames (see _plan_white_frames) as float32, in file order."""
+        files, counts, picks = plan if plan is not None else self._plan_white_frames(max_frames)
+        if len(picks) == 0:
+            return
+        starts = np.cumsum([0] + counts[:-1])
+        done = 0
+        for i, (fname, start, n_file) in enumerate(zip(files, starts, counts)):
+            local = picks[(picks >= start) & (picks < start + n_file)] - start
+            if len(local) == 0:
+                continue
+            self.pca_progress.emit(
+                f'Loading white-field frames ({i + 1}/{len(files)}) [{done}/{len(picks)}]…')
+            try:
+                _n, read, close = self._open_white_file(fname)
+                try:
+                    for j in local:
+                        yield np.asarray(read(int(j)), dtype=np.float32)
+                        done += 1
+                finally:
+                    close()
             except Exception as e:
                 _dbg(f'[pca] error loading {fname}: {e}')
-        return frames
+
+    def _load_frames(self, max_frames=150):
+        """Up to max_frames full-resolution frames (memory-capped), spread across all files."""
+        mem_cap = max(4, self.MAX_STACK_BYTES // max(1, self._w * self._h * 4))
+        return list(self._iter_white_frames(min(max_frames, mem_cap)))
+
+    def _mean_frame(self, max_frames=150):
+        """Full-resolution mean of up to max_frames frames, streamed (no stack held)."""
+        acc, n = None, 0
+        for f in self._iter_white_frames(max_frames):
+            if acc is None:
+                acc = np.zeros(f.shape, dtype=np.float64)
+            elif f.shape != acc.shape:
+                continue
+            acc += f
+            n += 1
+        return None if acc is None else (acc / n).astype(np.float32)
+
+    def _load_binned_stack(self, max_frames=150):
+        """Stream frames into a (K, Nb) stack binned by _PCA_BIN, plus the full-res mean.
+
+        Returns (X_bin, mean_full (H*W,), (H, W)), or (None, None, None)."""
+        b = _PCA_BIN
+        Nb = max(1, (self._h // b) * (self._w // b))
+        plan = self._plan_white_frames(max(4, min(max_frames, self.MAX_STACK_BYTES // (Nb * 4))))
+        K_max = len(plan[2])
+        X_bin = acc = shape = None
+        k = 0
+        for f in self._iter_white_frames(K_max, plan=plan):
+            if shape is None:
+                shape = f.shape
+                X_bin = np.empty((K_max, (shape[0] // b) * (shape[1] // b)), dtype=np.float32)
+                acc = np.zeros(shape, dtype=np.float64)
+            elif f.shape != shape:
+                continue
+            acc += f
+            X_bin[k] = _bin2d(f, b).ravel()
+            k += 1
+        if k == 0:
+            return None, None, None
+        return X_bin[:k], (acc / k).astype(np.float32).ravel(), shape
 
 
 class CellAdaptWorker(QThread):
@@ -1698,12 +1792,9 @@ class CellAdaptWorker(QThread):
     Algorithm:
       T_cell        = cell_mean / master_mean              (native-res scaling)
       E_high_scaled = E_high * T_cell                      (scaled, non-orthogonal)
-      U, _, Vt      = svd(E_high_scaled)                   (thin SVD)
-      E_high_cell   = Vt                                   (orthonormal rows; U is the component rotation)
-      T_cell_low    = blur(cell_mean) / master_mean_low    (blurred-space scaling)
-      E_low_scaled  = E_low * T_cell_low
-      E_low_aligned = U.T @ E_low_scaled                   (same rotation → preserves correspondence)
-      Q_low         = E_low_aligned / row_norms            (unit-norm low-res analysis basis)
+      _, _, Vt      = svd(E_high_scaled)                   (thin SVD)
+      E_high_cell   = Vt                                   (orthonormal rows)
+      blur mode: E_high_cell, Q_low = _blur_analysis_basis(E_high_cell, ...)
     """
 
     adapt_done     = pyqtSignal(object, object, object, object)  # cell_mean, E_high_cell, mu_low_cell, Q_low
@@ -1730,14 +1821,10 @@ class CellAdaptWorker(QThread):
             loader = PcaComputeWorker(self._folder, self._fmt, self._w, self._h)
             loader.pca_progress = self.adapt_progress  # forward progress messages
             self.adapt_progress.emit('Cell adaptation: loading frames…')
-            frames = loader._load_frames(max_frames=50)
-            if not frames:
+            cell_mean_2d = loader._mean_frame(max_frames=50)            # (H, W), streamed
+            if cell_mean_2d is None:
                 self.adapt_done.emit(None, None, None, None)
                 return
-
-            self.adapt_progress.emit(f'Cell adaptation: averaging {len(frames)} frames…')
-            stack = np.stack([f.astype(np.float32) for f in frames], axis=0)
-            cell_mean_2d = stack.mean(axis=0)                           # (H, W)
             cell_mean    = cell_mean_2d.ravel()                         # (H*W,)
 
             mu_master = np.maximum(self._master_mean, np.float32(1e-3))
@@ -1748,31 +1835,18 @@ class CellAdaptWorker(QThread):
 
             # Re-orthogonalize via thin SVD so the projection is a proper orthogonal
             # projection rather than an oblique one.  Vt rows are orthonormal in
-            # pixel space; U encodes the rotation applied to the component ordering
-            # and is reused below to keep the low-res basis in correspondence.
+            # pixel space.
             self.adapt_progress.emit('Cell adaptation: re-orthogonalizing components…')
-            U, _, E_high_cell_vt = np.linalg.svd(E_high_scaled, full_matrices=False)
+            _, _, E_high_cell_vt = np.linalg.svd(E_high_scaled, full_matrices=False)
             E_high_cell = np.ascontiguousarray(E_high_cell_vt.astype(np.float32))  # (n, H*W)
 
-            if (self._blur_sigma > 0
-                    and self._master_mean_low is not None
-                    and self._master_components_low is not None):
-                self.adapt_progress.emit('Cell adaptation: blurring cell mean…')
-                # mu_low_cell must be in the same downsampled space as master_mean_low
-                n_low       = self._master_mean_low.shape[0]
-                mu_low_cell = _blur_and_bin(cell_mean_2d, self._blur_sigma, n_low)
-                mu_master_low = np.maximum(self._master_mean_low, np.float32(1e-3))
-                T_cell_low    = mu_low_cell / mu_master_low             # (N_low,)
-                E_low_scaled  = self._master_components_low * T_cell_low  # (n, N_low)
-
-                # Apply the same component-space rotation as E_high_cell so that
-                # Q_low[i] and E_high_cell[i] still represent the same beam mode.
-                self.adapt_progress.emit('Cell adaptation: aligning low-res components…')
-                E_low_aligned = (U.T @ E_low_scaled).astype(np.float32)  # (n, N_low)
-                norms_low = np.linalg.norm(E_low_aligned, axis=1, keepdims=True)
-                np.maximum(norms_low, np.float32(1e-10), out=norms_low)
-                Q_low = np.ascontiguousarray((E_low_aligned / norms_low).astype(np.float32))  # (n, N_low)
-
+            if self._blur_sigma > 0:
+                # Blur-mode fitting basis built from the adapted components
+                # themselves, so weights fitted in blurred space match them.
+                E_high_cell, Q_low = _blur_analysis_basis(
+                    E_high_cell, cell_mean_2d.shape, self._blur_sigma,
+                    lambda msg: self.adapt_progress.emit(f'Cell adaptation: {msg}'))
+                mu_low_cell = _blur_and_bin(cell_mean_2d, self._blur_sigma, Q_low.shape[1])
                 self.adapt_done.emit(cell_mean, E_high_cell, mu_low_cell, Q_low)
             else:
                 self.adapt_done.emit(cell_mean, E_high_cell, None, None)
@@ -4692,9 +4766,11 @@ class LucidViewer(ViewerMixin, QMainWindow):
         return frames
 
     def _pca_cache_path(self, folder, h, w):
+        # v2: frames spread across all files, 2x2-binned eigen-decomposition,
+        # matched blur basis. Older caches are ignored, not loaded.
         if self._pca_blur_enabled:
-            return os.path.join(folder, f'pca_cache_{h}x{w}_blur{self._pca_blur_sigma}.npz')
-        return os.path.join(folder, f'pca_cache_{h}x{w}.npz')
+            return os.path.join(folder, f'pca_cache_v2_{h}x{w}_blur{self._pca_blur_sigma}.npz')
+        return os.path.join(folder, f'pca_cache_v2_{h}x{w}.npz')
 
     def _pca_cache_valid(self, cache_path, folder):
         """True if cache file exists and is newer than all source files in folder."""

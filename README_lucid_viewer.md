@@ -241,12 +241,33 @@ bg   = mean + V.T @ (V @ (data − mean))
 trans = clip(data / max(bg, 0.5 × mean), 0, 10)
 ```
 
-where `V` is the `(n_components, H×W)` matrix of eigenvectors computed from the
-white-field frames (via SVD / randomized PCA).
+where `V` is the `(n_components, H×W)` matrix of beam-variation components
+computed from the white-field frames.
 
-**N components** spin box — number of PCA components to subtract (1–20,
-default 5). More components capture more beam variation but risk subtracting
-real sample signal.
+How the basis is built:
+
+- **Frames:** up to 150 white-field frames, spread evenly across *all* files in
+  the folder (not filled from the first file), capped so the binned stack stays
+  under 1.5 GB (~150 full ORCA-Fire frames, ~60 full ATX245 frames).
+- **Mean:** averaged at full resolution, so pixel-scale structure (dust, pixel
+  response) is divided out exactly.
+- **Components:** the eigen-decomposition runs on 2×2-binned frames, then each
+  component is bilinearly upsampled back to full resolution and
+  re-orthonormalized. Beam variations are much smoother than 2 pixels, so this
+  loses nothing measurable and fits 4× more frames in the same memory.
+- **Cache:** the result is saved as `pca_cache_v2_<H>x<W>.npz` (or
+  `…_blur<σ>.npz`) inside the white-field folder, and rebuilt automatically when
+  a frame file in that folder is newer than the cache. Delete it to force a
+  rebuild. Caches from older versions (`pca_cache_<H>x<W>.npz`) are ignored.
+
+**N components** spin box — number of PCA components to subtract (1–20). More
+components capture more beam variation but risk subtracting real sample signal:
+each extra component is one more pattern the fit can use to absorb features of
+the data frame. When a white-field folder is first used, N is picked
+automatically: at the largest drop between consecutive explained-variance
+values if that drop is at least 2× (a clear elbow), otherwise the smallest N
+explaining 75% of the white-field variance. Changing N by hand sticks for that
+white-field folder; a different folder triggers a new automatic pick.
 
 **PCA settings…** — opens the [PCA Settings dialog](#pca-settings-dialog).
 
@@ -262,21 +283,37 @@ first time it is needed. Progress is shown in the correction status label.
 Enable **Gaussian blur for temporal weight projection** and set a **Blur sigma**
 (pixels, default 400 px).
 
-Instead of projecting the raw data frame onto the PCA basis, the frame is first
-blurred with a Gaussian (FFT-accelerated, O(H·W·log(H·W))) and block-average
-downsampled. The projection is done in this low-resolution space to obtain beam
-coefficients that are insensitive to sample features. The background is then
-reconstructed using the full-resolution eigenvectors:
+**What gets blurred:** only the copies used to *estimate the weights* of each
+component. The basis itself, and the background that is divided out, stay
+unblurred and full resolution:
+
+1. Each **data frame** is blurred (Gaussian σ, FFT-accelerated) and
+   block-averaged down by `B = min(16, σ // 50)` (B = 8 at σ = 400).
+2. Each full-resolution **component** (and the white-field mean) is blurred and
+   downsampled the same way, giving a low-res copy of the same pattern.
+3. The weights are the least-squares fit of the blurred data frame by the
+   blurred components. Sample features finer than ~σ are averaged away first,
+   so they can't pull the weights.
+4. The background is rebuilt with those weights from the **unblurred**
+   full-resolution components and mean:
 
 ```
-d_low  = blur_and_bin(data, σ) − mean_low
-coeffs = V_low @ d_low            # projection in blurred space
-bg     = mean + V_high.T @ coeffs # reconstruction at full resolution
+d_low  = blur_and_bin(data, σ) − blur_and_bin(mean, σ)
+coeffs = least_squares(blur_and_bin(V, σ), d_low)
+bg     = mean + V.T @ coeffs          # full resolution
 ```
 
-This mode requires two PCA passes: one on the raw white frames (for `V_high`
-and `mean`) and one on the blurred white frames (for `V_low` and `mean_low`).
-Both passes run automatically when the white-field folder is loaded.
+Blurring doesn't help against sample features as large as σ or larger: they
+survive the blur and still pull the weights.
+
+Components that the blur erases (structure much finer than σ) can't be fitted
+in blurred space and are left out of blur-mode fitting.
+
+> Before Oct 2026, blur mode ran a *separate* PCA on blurred white frames and
+> applied its weights to the full-resolution components. The two bases weren't
+> matched, so the weights came out too small by about the downsample factor and
+> blur mode removed only a fraction of the beam variation. Caches built that way
+> are no longer used.
 
 ### Master / Universal PCA
 
